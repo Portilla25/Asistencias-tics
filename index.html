@@ -1081,120 +1081,107 @@ function exportPersonalizados(){
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 💾 AUTO-SAVE — localStorage + JSONBin con proxy CORS
+// 💾 SYNC — localStorage (instantáneo) + Google Apps Script (nube)
 // ═══════════════════════════════════════════════════════════════════
-let JSONBIN_KEY = localStorage.getItem('jb_key') || '';
-let JSONBIN_BIN = localStorage.getItem('jb_bin') || '';
-let _saveTimer  = null;
+let GAS_URL    = localStorage.getItem('gas_url') || '';
+let _saveTimer = null;
+let _syncing   = false;
 
-// Always save to localStorage immediately (works 100%)
+// ── localStorage (siempre activo, instantáneo) ────────────────────
 function localSave(){
-  try {
+  try{
     localStorage.setItem('asist_state', JSON.stringify(state));
     localStorage.setItem('asist_pers',  JSON.stringify(personalizados));
-  } catch(e){ console.warn('localStorage full', e); }
+  }catch(e){ console.warn('localStorage lleno',e); }
 }
 
 function localLoad(){
-  try {
-    const s = localStorage.getItem('asist_state');
-    const p = localStorage.getItem('asist_pers');
+  try{
+    const s=localStorage.getItem('asist_state');
+    const p=localStorage.getItem('asist_pers');
     if(s) Object.assign(state, JSON.parse(s));
     if(p) personalizados = JSON.parse(p);
     return !!(s||p);
-  } catch(e){ return false; }
+  }catch(e){ return false; }
 }
 
+// ── Status indicator ──────────────────────────────────────────────
 function setSyncStatus(s, msg=''){
-  const el = document.getElementById('syncIndicator'); if(!el) return;
-  const map = {
-    saving:       {icon:'🔄', text:'Guardando...',   color:'var(--yellow)'},
-    saved:        {icon:'💾', text:'Guardado local',  color:'var(--green)'},
-    cloudsaved:   {icon:'🟢', text:'En la nube',      color:'var(--green)'},
-    error:        {icon:'🔴', text:msg||'Error',      color:'var(--red)'},
-    unconfigured: {icon:'☁️', text:'Conectar nube',   color:'var(--muted)'},
-    loading:      {icon:'🔄', text:'Cargando...',     color:'var(--yellow)'},
+  const el=document.getElementById('syncIndicator'); if(!el) return;
+  const map={
+    saved:        {icon:'💾', text:'Guardado',       color:'var(--green)'},
+    cloudsaved:   {icon:'🟢', text:'En la nube',     color:'var(--green)'},
+    saving:       {icon:'🔄', text:'Sincronizando',  color:'var(--yellow)'},
+    error:        {icon:'🔴', text:msg||'Error nube',color:'var(--red)'},
+    unconfigured: {icon:'☁️', text:'Conectar nube',  color:'var(--muted)'},
+    loading:      {icon:'🔄', text:'Cargando...',    color:'var(--yellow)'},
   };
-  const m = map[s]||map.saving;
-  const click = s==='unconfigured' ? "onclick='showCloudConfig()'" : "onclick='showCloudConfig()'";
-  el.innerHTML = `<span style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer" ${click} title="Configurar nube">${m.icon} ${m.text}</span>`;
+  const m=map[s]||map.saved;
+  el.innerHTML=`<span onclick="showCloudConfig()" style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none" title="Configurar sincronización">${m.icon} ${m.text}</span>`;
 }
 
+// ── scheduleSync: guarda local YA, nube después ───────────────────
 function scheduleSync(){
-  localSave(); // immediate local save
-  setSyncStatus('saved');
-  // Also try cloud if configured
-  if(JSONBIN_KEY && JSONBIN_BIN){
-    clearTimeout(_saveTimer);
-    _saveTimer = setTimeout(cloudSave, 2500);
-  }
+  localSave();                       // ← instantáneo, nunca bloquea UI
+  setSyncStatus(GAS_URL ? 'saving' : 'saved');
+  if(!GAS_URL) return;
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(cloudSave, 3000); // espera 3s de inactividad
 }
 
+// ── Google Apps Script API ────────────────────────────────────────
 function getPayload(){
-  return { state, personalizados, savedAt: new Date().toISOString() };
+  return { action:'save', state, personalizados, savedAt:new Date().toISOString() };
 }
 
-// Use a CORS proxy to bypass JSONBin CORS restrictions
 async function cloudSave(){
-  if(!JSONBIN_KEY||!JSONBIN_BIN) return;
-  try {
-    // Try direct first
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN}`, {
-      method:'PUT',
-      headers:{
-        'Content-Type':'application/json',
-        'X-Master-Key':JSONBIN_KEY,
-        'X-Bin-Versioning':'false'
-      },
+  if(!GAS_URL || _syncing) return;
+  _syncing = true;
+  try{
+    await fetch(GAS_URL, {
+      method:'POST',
+      mode:'no-cors',   // Apps Script no necesita CORS preflight con no-cors
+      headers:{'Content-Type':'text/plain'},
       body: JSON.stringify(getPayload())
     });
-    if(res.ok){ setSyncStatus('cloudsaved'); return; }
-    throw new Error(res.status);
-  } catch(e){
-    // Silently fail - local save already done
-    console.warn('Cloud save failed, local save active:', e.message);
-  }
+    // no-cors no devuelve respuesta legible, pero la petición llega
+    setSyncStatus('cloudsaved');
+  }catch(e){
+    console.warn('Cloud save failed (local OK):', e.message);
+    setSyncStatus('error','Sin conexión');
+  }finally{ _syncing=false; }
 }
 
 async function cloudLoad(){
-  if(!JSONBIN_KEY||!JSONBIN_BIN){ 
-    // Load from localStorage instead
-    const loaded = localLoad();
-    if(loaded){
-      refreshCurrentPage();
-      showToast('💾 Datos cargados desde este dispositivo');
-    }
+  if(!GAS_URL){
+    const ok=localLoad();
+    if(ok){ refreshCurrentPage(); showToast('💾 Datos restaurados desde este dispositivo'); }
     setSyncStatus('unconfigured');
-    return; 
+    return;
   }
   setSyncStatus('loading');
-  try {
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${JSONBIN_BIN}/latest`,{
-      headers:{'X-Master-Key':JSONBIN_KEY, 'X-Bin-Meta':'false'}
-    });
+  try{
+    const res = await fetch(`${GAS_URL}?action=load`, { method:'GET' });
     if(!res.ok) throw new Error(res.status);
-    const json = await res.json();
-    // JSONBin v3 returns record directly when X-Bin-Meta is false
-    const data = json.record || json;
+    const data = await res.json();
     if(data && data.state){
       Object.assign(state, data.state);
       if(data.personalizados) personalizados = data.personalizados;
-      localSave(); // sync to local too
+      localSave();
       refreshCurrentPage();
       setSyncStatus('cloudsaved');
-      showToast('🟢 Datos cargados desde la nube');
+      showToast('🟢 Datos cargados desde Google Sheets');
     } else {
-      // Cloud empty, use local
-      localLoad();
-      refreshCurrentPage();
+      // Hoja vacía — subir lo local
+      const ok=localLoad();
+      if(ok){ refreshCurrentPage(); scheduleSync(); }
       setSyncStatus('cloudsaved');
     }
-  } catch(e){
+  }catch(e){
     console.warn('Cloud load failed:', e);
-    // Fallback to localStorage
-    const loaded = localLoad();
-    if(loaded){ refreshCurrentPage(); showToast('💾 Cargado desde este dispositivo (nube no disponible)'); }
-    setSyncStatus('error', 'Nube no disponible');
+    const ok=localLoad();
+    if(ok){ refreshCurrentPage(); showToast('💾 Cargado desde este dispositivo'); }
+    setSyncStatus('error','Sin conexión a nube');
   }
 }
 
@@ -1204,106 +1191,66 @@ function refreshCurrentPage(){
   else renderModule(currentPage);
 }
 
-async function cloudCreateBin(key){
-  const res = await fetch('https://api.jsonbin.io/v3/b',{
-    method:'POST',
-    headers:{
-      'Content-Type':'application/json',
-      'X-Master-Key':key,
-      'X-Bin-Name':'asistencias-redes-tics',
-      'X-Bin-Private':'true'
-    },
-    body: JSON.stringify(getPayload())
-  });
-  if(!res.ok){
-    const err = await res.json().catch(()=>({}));
-    throw new Error(err.message||res.status);
-  }
-  const json = await res.json();
-  return json.metadata.id;
-}
-
+// ── Config modal ──────────────────────────────────────────────────
 function showCloudConfig(){
-  const isConnected = !!(JSONBIN_KEY && JSONBIN_BIN);
+  const connected = !!GAS_URL;
   const html=`
-  <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:.79rem;color:var(--muted);line-height:1.8;margin-bottom:12px;">
-    <strong style="color:var(--text);display:block;margin-bottom:4px;">☁️ Guardar en la nube (JSONBin)</strong>
-    1. Ve a <a href="https://jsonbin.io/login" target="_blank" style="color:var(--amber)">jsonbin.io</a> → inicia sesión<br>
-    2. Panel izquierdo: <strong style="color:var(--text)">API Keys</strong> → copia tu <strong style="color:var(--text)">Secret Key</strong><br>
-    3. Pégala abajo → clic en <strong style="color:var(--text)">Conectar</strong>
-    <div style="margin-top:8px;padding:8px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.2);border-radius:6px;color:var(--green);font-size:.74rem;">
-      💾 Mientras tanto, tus datos se guardan automáticamente en <strong>este navegador</strong>. No perderás nada.
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:.79rem;color:var(--muted);line-height:1.9;margin-bottom:14px;">
+    <strong style="color:var(--text);font-size:.85rem;">⚙️ Pasos para conectar Google Sheets</strong><br>
+    <span style="color:var(--muted2);font-size:.73rem;">Hazlo una sola vez — luego todo es automático</span>
+    <ol style="margin:10px 0 0 16px;display:flex;flex-direction:column;gap:4px;">
+      <li>Ve a <a href="https://script.google.com" target="_blank" style="color:var(--amber)">script.google.com</a> → <strong style="color:var(--text)">Nuevo proyecto</strong></li>
+      <li>Borra el código que viene y pega el código del archivo <code style="background:var(--s3);padding:1px 5px;border-radius:3px;font-size:.72rem">Code.gs</code> que descargaste</li>
+      <li>Clic en <strong style="color:var(--text)">Implementar → Nueva implementación</strong></li>
+      <li>Tipo: <strong style="color:var(--text)">Aplicación web</strong> · Acceso: <strong style="color:var(--text)">Cualquier usuario</strong></li>
+      <li>Clic en <strong style="color:var(--text)">Implementar</strong> → copia la URL que aparece</li>
+      <li>Pégala abajo ↓</li>
+    </ol>
+    <div style="margin-top:10px;padding:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.2);border-radius:6px;color:var(--green);font-size:.73rem;">
+      💾 Tus datos están guardados en este navegador. No perderás nada mientras configuras.
     </div>
   </div>
-  <div class="fgroup" style="margin-bottom:10px">
-    <div class="flabel">Secret Key / Master Key</div>
-    <input class="finp" id="jbKeyInp" placeholder="\$2a\$10\$..." value="${JSONBIN_KEY}" style="font-family:'JetBrains Mono',monospace;font-size:.74rem;">
-  </div>
   <div class="fgroup">
-    <div class="flabel">Bin ID (se crea solo si lo dejas vacío)</div>
-    <input class="finp" id="jbBinInp" placeholder="6999c0a01a35bc..." value="${JSONBIN_BIN}" style="font-family:'JetBrains Mono',monospace;font-size:.74rem;">
+    <div class="flabel">URL de tu Apps Script</div>
+    <input class="finp" id="gasUrlInp" placeholder="https://script.google.com/macros/s/AKfy.../exec" value="${GAS_URL}" style="font-size:.74rem;">
   </div>
-  ${isConnected ? `<div style="margin-top:10px;font-size:.75rem;color:var(--green);">🟢 Conectado — Bin: <code style="font-family:'JetBrains Mono',monospace">${JSONBIN_BIN}</code></div>` : ''}`;
+  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Conectado actualmente</div>`:''}`;
 
-  showModal('☁️ Sincronización en la nube','', async()=>{
-    const key = document.getElementById('jbKeyInp')?.value.trim();
-    const bin = document.getElementById('jbBinInp')?.value.trim();
-    if(!key){ showToast('⚠️ Ingresa tu Secret Key'); return; }
-    const okBtn = document.getElementById('mOk');
-    okBtn.textContent='Conectando...'; okBtn.disabled=true;
-    try {
-      let binId = bin;
-      if(!binId){
-        showToast('🔄 Creando espacio en la nube...');
-        binId = await cloudCreateBin(key);
-        showToast(`✅ Bin creado: ${binId}`);
-      }
-      JSONBIN_KEY=key; JSONBIN_BIN=binId;
-      localStorage.setItem('jb_key',key);
-      localStorage.setItem('jb_bin',binId);
-      closeModal();
-      showToast('✅ Conectado. Subiendo datos...');
-      await cloudSave();
-      setSyncStatus('cloudsaved');
-    } catch(e){
-      console.error('Connect error:',e);
-      showToast('❌ Error al conectar. Verifica tu Secret Key en jsonbin.io → API Keys');
-      okBtn.textContent='Conectar'; okBtn.disabled=false;
-    }
-  }, html);
+  showModal('☁️ Sincronización con Google Sheets','',async()=>{
+    const url=document.getElementById('gasUrlInp')?.value.trim();
+    if(!url){ showToast('⚠️ Pega la URL de tu Apps Script'); return; }
+    if(!url.includes('script.google.com')){ showToast('⚠️ La URL no parece válida'); return; }
+    GAS_URL=url;
+    localStorage.setItem('gas_url',url);
+    closeModal();
+    showToast('✅ URL guardada. Sincronizando...');
+    await cloudLoad();
+  },html);
+  document.getElementById('mOk').textContent = connected ? 'Actualizar URL' : 'Conectar';
 
-  document.getElementById('mOk').textContent = isConnected ? 'Actualizar' : 'Conectar';
-
-  if(isConnected){
+  if(connected){
     setTimeout(()=>{
-      const btns=document.querySelector('.modal-btns');
-      if(!btns||document.getElementById('discBtn')) return;
+      const btns=document.querySelector('.modal-btns'); if(!btns) return;
+      if(document.getElementById('discBtn')) return;
       const b=document.createElement('button');
-      b.id='discBtn'; b.className='btn btn-red'; b.textContent='Desconectar nube';
+      b.id='discBtn'; b.className='btn btn-red'; b.textContent='Desconectar';
       b.onclick=()=>{
-        JSONBIN_KEY=''; JSONBIN_BIN='';
-        localStorage.removeItem('jb_key'); localStorage.removeItem('jb_bin');
+        GAS_URL=''; localStorage.removeItem('gas_url');
         closeModal(); setSyncStatus('unconfigured');
-        showToast('Desconectado. Datos siguen guardados en este dispositivo.');
+        showToast('Desconectado. Datos siguen en este dispositivo.');
       };
       btns.prepend(b);
     },60);
   }
 }
 
-// ── INIT: Load data on startup ────────────────────────────────────
+// ── INIT ──────────────────────────────────────────────────────────
 (function initData(){
-  if(JSONBIN_KEY && JSONBIN_BIN){
-    cloudLoad(); // tries cloud, falls back to local
-  } else {
-    const loaded = localLoad();
-    if(loaded){
-      setTimeout(()=>{
-        refreshCurrentPage();
-        showToast('💾 Datos del dispositivo restaurados');
-      }, 300);
-    }
-    setTimeout(()=>setSyncStatus('unconfigured'), 150);
+  if(GAS_URL){ cloudLoad(); }
+  else{
+    const ok=localLoad();
+    if(ok) setTimeout(()=>{ refreshCurrentPage(); showToast('💾 Datos restaurados'); },300);
+    setTimeout(()=>setSyncStatus('unconfigured'),150);
   }
 })();
 
