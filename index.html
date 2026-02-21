@@ -403,8 +403,12 @@ tr:hover td{background:rgba(245,158,11,.03);}
     <div class="panel">
       <div class="panel-title">➕ <span>Agregar alumno personalizado</span></div>
       <div class="form-grid">
-        <div class="fgroup"><div class="flabel">Nombre completo *</div><input class="finp" id="pNombre" placeholder="Apellidos y Nombres"></div>
-        <div class="fgroup"><div class="flabel">Teléfono / Contacto</div><input class="finp" id="pTel" placeholder="999 999 999"></div>
+        <div class="fgroup"><div class="flabel">Apellidos y Nombres *</div><input class="finp" id="pNombre" placeholder="Ej: García López Ana"></div>
+        <div class="fgroup"><div class="flabel">DNI</div><input class="finp" id="pDni" placeholder="12345678" maxlength="8"></div>
+        <div class="fgroup"><div class="flabel">Fecha de nacimiento</div><input class="finp" type="date" id="pFecha"></div>
+        <div class="fgroup"><div class="flabel">Edad</div><input class="finp" id="pEdad" placeholder="25" type="number" min="1" max="99" style="width:80px"></div>
+        <div class="fgroup"><div class="flabel">Correo electrónico</div><input class="finp" id="pCorreo" placeholder="correo@gmail.com" type="email"></div>
+        <div class="fgroup"><div class="flabel">Celular</div><input class="finp" id="pTel" placeholder="999 999 999"></div>
         <div class="fgroup"><div class="flabel">Tema / Materia</div><input class="finp" id="pTema" placeholder="Ej: Excel básico"></div>
         <div class="fgroup"><div class="flabel">Horario / Día</div><input class="finp" id="pHorario" placeholder="Ej: Sábados 10am"></div>
       </div>
@@ -634,7 +638,7 @@ function parseSheet(rows){
       if(raw==='Presente'||raw==='Falta'||raw==='Permiso') asistencias[id][fecha]=raw;
     }
   }
-  return alumnos.length>0?{alumnos,asistencias,fechas}:null;
+  return alumnos.length>0?{alumnos:alumnos.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'})),asistencias,fechas}:null;
 }
 
 function normalizeDate(s){
@@ -773,32 +777,51 @@ function eliminarAlumno(key,id){
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// ADD ALUMNO MODAL
+// ADD ALUMNO MODAL (módulos)
 // ═══════════════════════════════════════════════════════════════════
 function showAddAlumnoModal(key){
   const [t,m]=key.split('-');
   const label=`${TURNOS[t].label} — Módulo ${m}`;
   showModal(
     `➕ Agregar alumno — ${label}`,
-    'Escribe el nombre completo del alumno para añadirlo a este módulo.',
+    '',
     ()=>{
       const nombre=document.getElementById('addNombreInp')?.value.trim();
-      if(!nombre){showToast('⚠️ Escribe un nombre');return;}
+      if(!nombre){showToast('⚠️ Escribe el nombre');return;}
       const d=state[key];
       const id=Date.now();
-      d.alumnos.push({id,nombre});
+      d.alumnos.push({
+        id, nombre,
+        dni:    document.getElementById('addDniInp')?.value.trim()||'',
+        fecha:  document.getElementById('addFechaInp')?.value||'',
+        edad:   document.getElementById('addEdadInp')?.value.trim()||'',
+        correo: document.getElementById('addCorreoInp')?.value.trim()||'',
+        cel:    document.getElementById('addCelInp')?.value.trim()||'',
+      });
       d.asistencias[id]={};
+      sortAlumnos(d);
       closeModal();
       renderModule(key);
-      showToast(`✅ "${nombre}" agregado al módulo`);
+      showToast(`✅ "${nombre}" agregado`);
       scheduleSync();
     },
-    `<div class="fgroup" style="margin-top:4px">
-      <div class="flabel">Nombre completo</div>
-      <input class="finp" id="addNombreInp" placeholder="Apellidos y Nombres" autofocus>
+    `<div class="form-grid" style="margin-top:4px">
+      <div class="fgroup" style="grid-column:1/-1"><div class="flabel">Apellidos y Nombres *</div><input class="finp" id="addNombreInp" placeholder="Ej: García López Ana" autofocus></div>
+      <div class="fgroup"><div class="flabel">DNI</div><input class="finp" id="addDniInp" placeholder="12345678" maxlength="8"></div>
+      <div class="fgroup"><div class="flabel">Fecha de nacimiento</div><input class="finp" type="date" id="addFechaInp"></div>
+      <div class="fgroup"><div class="flabel">Edad</div><input class="finp" id="addEdadInp" placeholder="25" type="number" min="1" max="99"></div>
+      <div class="fgroup"><div class="flabel">Correo</div><input class="finp" id="addCorreoInp" placeholder="correo@gmail.com" type="email"></div>
+      <div class="fgroup"><div class="flabel">Celular</div><input class="finp" id="addCelInp" placeholder="999 999 999"></div>
     </div>`
   );
   setTimeout(()=>document.getElementById('addNombreInp')?.focus(),100);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SORT HELPER — A-Z por apellidos
+// ═══════════════════════════════════════════════════════════════════
+function sortAlumnos(d){
+  d.alumnos.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -810,15 +833,22 @@ function agregarPersonalizado(){
   const p={
     id:Date.now(),
     nombre,
-    tel:document.getElementById('pTel').value.trim(),
-    tema:document.getElementById('pTema').value.trim(),
+    dni:    document.getElementById('pDni').value.trim(),
+    fecha:  document.getElementById('pFecha').value,
+    edad:   document.getElementById('pEdad').value.trim(),
+    correo: document.getElementById('pCorreo').value.trim(),
+    tel:    document.getElementById('pTel').value.trim(),
+    tema:   document.getElementById('pTema').value.trim(),
     horario:document.getElementById('pHorario').value.trim(),
     clases:[]
   };
   personalizados.push(p);
-  ['pNombre','pTel','pTema','pHorario'].forEach(id=>document.getElementById(id).value='');
+  personalizados.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}));
+  ['pNombre','pDni','pFecha','pEdad','pCorreo','pTel','pTema','pHorario'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.value='';
+  });
   renderPersonalizados();
-  showToast(`✅ "${nombre}" agregado a personalizados`);
+  showToast(`✅ "${nombre}" agregado`);
   scheduleSync();
 }
 
@@ -846,15 +876,16 @@ function eliminarPersonalizado(pid){
 
 function renderPersonalizados(){
   const q=(document.getElementById('persSearch')?.value||'').toLowerCase();
-  const filtered=personalizados.filter(p=>p.nombre.toLowerCase().includes(q));
+  const filtered=personalizados.filter(p=>p.nombre.toLowerCase().includes(q)||
+    (p.dni&&p.dni.includes(q))||(p.correo&&p.correo.toLowerCase().includes(q)));
   const container=document.getElementById('persList');
 
   if(filtered.length===0){
-    container.innerHTML=`<div class="empty"><div class="ei">👤</div>${personalizados.length===0?'Sin alumnos personalizados aún. Agrégalos con el formulario de arriba.':'Sin resultados.'}</div>`;
+    container.innerHTML=`<div class="empty"><div class="ei">👤</div>${personalizados.length===0?'Sin alumnos personalizados. Agrégalos con el formulario de arriba.':'Sin resultados.'}</div>`;
     return;
   }
 
-  container.innerHTML=filtered.map(p=>{
+  container.innerHTML=filtered.map((p,idx)=>{
     const totalC=p.clases.length;
     const totalP=p.clases.filter(c=>c.val==='Presente').length;
     const pct=totalC>0?Math.round((totalP/totalC)*100):0;
@@ -863,24 +894,32 @@ function renderPersonalizados(){
     return`
     <div class="pers-card">
       <div class="pers-card-top">
-        <div>
-          <div class="pers-name">${p.nombre}</div>
-          <div class="pers-meta">
-            ${p.tel?`<div class="pmeta">📞 ${p.tel}</div>`:''}
-            ${p.tema?`<div class="pmeta">📚 ${p.tema}</div>`:''}
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:.68rem;font-family:'JetBrains Mono',monospace;color:var(--muted);background:var(--s2);border:1px solid var(--border);border-radius:5px;padding:2px 7px">${String(idx+1).padStart(2,'0')}</span>
+            <div class="pers-name">${p.nombre}</div>
+            ${pct>0?`<span style="font-size:.72rem;font-weight:700;color:${pcol}">${pct}%</span>`:''}
+          </div>
+          <div class="pers-meta" style="margin-top:6px">
+            ${p.dni    ?`<div class="pmeta">🪪 DNI: <strong style="color:var(--text)">${p.dni}</strong></div>`:''}
+            ${p.fecha  ?`<div class="pmeta">🎂 ${p.fecha}${p.edad?` · ${p.edad} años`:''}</div>`:(p.edad?`<div class="pmeta">👤 ${p.edad} años</div>`:'')}
+            ${p.correo ?`<div class="pmeta">✉️ ${p.correo}</div>`:''}
+            ${p.tel    ?`<div class="pmeta">📞 ${p.tel}</div>`:''}
+            ${p.tema   ?`<div class="pmeta">📚 ${p.tema}</div>`:''}
             ${p.horario?`<div class="pmeta">🕐 ${p.horario}</div>`:''}
-            <div class="pmeta" style="color:${pcol};font-weight:600">${totalC} clase(s) · ${pct}% asistencia</div>
+            ${totalC>0 ?`<div class="pmeta" style="color:${pcol}">📊 ${totalP}/${totalC} clases asistidas</div>`:''}
           </div>
         </div>
         <div class="pers-actions">
-          <button class="btn btn-red" onclick="eliminarPersonalizado(${p.id})">✕ Eliminar</button>
+          <button class="btn btn-outline" style="font-size:.72rem;padding:4px 10px" onclick="editarPersonalizado(${p.id})">✏️ Editar</button>
+          <button class="btn btn-red" onclick="eliminarPersonalizado(${p.id})">✕</button>
         </div>
       </div>
       <div class="pers-clases">
         <div class="pers-clases-list">
           ${p.clases.length===0?`<span style="font-size:.78rem;color:var(--muted)">Sin clases registradas aún</span>`:''}
           ${p.clases.map(c=>`
-            <div class="clase-chip" title="Click para eliminar" onclick="registrarClasePersonalizada(${p.id},'${c.fecha}','${c.val}')">
+            <div class="clase-chip" title="Clic para quitar" onclick="registrarClasePersonalizada(${p.id},'${c.fecha}','${c.val}')">
               <span class="cc-date">${c.fecha}</span>
               <span class="cc-val ${c.val}">${c.val}</span>
             </div>`).join('')}
@@ -888,18 +927,47 @@ function renderPersonalizados(){
         <div class="clase-add">
           <span style="font-size:.75rem;color:var(--muted);font-weight:600">Registrar clase:</span>
           <input type="date" class="inp" id="pd-${p.id}" value="${today}" style="font-size:.78rem;padding:4px 8px">
-          <button class="btn btn-green" style="font-size:.74rem;padding:4px 10px" onclick="registrarClasePersonalizada(${p.id},document.getElementById('pd-${p.id}').value,'Presente')">✅ Presente</button>
-          <button class="btn btn-red"   style="font-size:.74rem;padding:4px 10px" onclick="registrarClasePersonalizada(${p.id},document.getElementById('pd-${p.id}').value,'Falta')">❌ Falta</button>
-          <button class="btn btn-outline" style="font-size:.74rem;padding:4px 10px;border-color:var(--blue);color:var(--blue)" onclick="registrarClasePersonalizada(${p.id},document.getElementById('pd-${p.id}').value,'Permiso')">🔵 Permiso</button>
+          <button class="btn btn-green"   style="font-size:.73rem;padding:4px 10px" onclick="registrarClasePersonalizada(${p.id},document.getElementById('pd-${p.id}').value,'Presente')">✅ Presente</button>
+          <button class="btn btn-red"     style="font-size:.73rem;padding:4px 10px" onclick="registrarClasePersonalizada(${p.id},document.getElementById('pd-${p.id}').value,'Falta')">❌ Falta</button>
+          <button class="btn btn-outline" style="font-size:.73rem;padding:4px 10px;border-color:var(--blue);color:var(--blue)" onclick="registrarClasePersonalizada(${p.id},document.getElementById('pd-${p.id}').value,'Permiso')">🔵 Permiso</button>
         </div>
       </div>
     </div>`;
   }).join('');
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// DASHBOARD
-// ═══════════════════════════════════════════════════════════════════
+function editarPersonalizado(pid){
+  const p=personalizados.find(x=>x.id===pid); if(!p) return;
+  const html=`
+    <div class="form-grid" style="margin-top:4px">
+      <div class="fgroup" style="grid-column:1/-1"><div class="flabel">Apellidos y Nombres *</div><input class="finp" id="epNombre" value="${p.nombre}"></div>
+      <div class="fgroup"><div class="flabel">DNI</div><input class="finp" id="epDni" value="${p.dni||''}"></div>
+      <div class="fgroup"><div class="flabel">Fecha de nacimiento</div><input class="finp" type="date" id="epFecha" value="${p.fecha||''}"></div>
+      <div class="fgroup"><div class="flabel">Edad</div><input class="finp" id="epEdad" type="number" value="${p.edad||''}"></div>
+      <div class="fgroup"><div class="flabel">Correo</div><input class="finp" id="epCorreo" type="email" value="${p.correo||''}"></div>
+      <div class="fgroup"><div class="flabel">Celular</div><input class="finp" id="epTel" value="${p.tel||''}"></div>
+      <div class="fgroup"><div class="flabel">Tema / Materia</div><input class="finp" id="epTema" value="${p.tema||''}"></div>
+      <div class="fgroup"><div class="flabel">Horario / Día</div><input class="finp" id="epHorario" value="${p.horario||''}"></div>
+    </div>`;
+  showModal('✏️ Editar alumno','',()=>{
+    const nombre=document.getElementById('epNombre')?.value.trim();
+    if(!nombre){showToast('⚠️ El nombre es obligatorio');return;}
+    p.nombre  = nombre;
+    p.dni     = document.getElementById('epDni')?.value.trim()||'';
+    p.fecha   = document.getElementById('epFecha')?.value||'';
+    p.edad    = document.getElementById('epEdad')?.value.trim()||'';
+    p.correo  = document.getElementById('epCorreo')?.value.trim()||'';
+    p.tel     = document.getElementById('epTel')?.value.trim()||'';
+    p.tema    = document.getElementById('epTema')?.value.trim()||'';
+    p.horario = document.getElementById('epHorario')?.value.trim()||'';
+    personalizados.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es',{sensitivity:'base'}));
+    closeModal();
+    renderPersonalizados();
+    showToast('✅ Datos actualizados');
+    scheduleSync();
+  }, html);
+  document.getElementById('mOk').textContent='Guardar cambios';
+}
 function renderDashboard(){
   let totalAl=0,todayPres=0,todayFalt=0,totalAlerts=0;
   const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
@@ -989,28 +1057,27 @@ function exportModulos(){
 
 function exportPersonalizados(){
   const wb=XLSX.utils.book_new();
-  const rows=[['Nombre','Teléfono','Tema/Materia','Horario','Total Clases','Presentes','Faltas','Permisos','% Asistencia']];
-  personalizados.forEach(p=>{
+  const rows=[['#','Apellidos y Nombres','DNI','Fecha Nac.','Edad','Correo','Celular','Tema/Materia','Horario','Total Clases','Presentes','Faltas','Permisos','% Asistencia']];
+  personalizados.forEach((p,i)=>{
     const P=p.clases.filter(c=>c.val==='Presente').length;
     const F=p.clases.filter(c=>c.val==='Falta').length;
     const Pm=p.clases.filter(c=>c.val==='Permiso').length;
     const tot=p.clases.length;
-    rows.push([p.nombre,p.tel,p.tema,p.horario,tot,P,F,Pm,tot>0?Math.round(((P+Pm)/tot)*100)+'%':'—']);
+    rows.push([i+1,p.nombre,p.dni||'',p.fecha||'',p.edad||'',p.correo||'',p.tel||'',p.tema||'',p.horario||'',tot,P,F,Pm,tot>0?Math.round(((P+Pm)/tot)*100)+'%':'—']);
   });
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols']=[{wch:30},{wch:16},{wch:20},{wch:18},{wch:12},{wch:12},{wch:12},{wch:12},{wch:14}];
+  ws['!cols']=[{wch:4},{wch:30},{wch:10},{wch:13},{wch:6},{wch:26},{wch:14},{wch:20},{wch:16},{wch:12},{wch:11},{wch:11},{wch:11},{wch:14}];
   XLSX.utils.book_append_sheet(wb,ws,'Personalizados');
 
-  // Detail sheet
-  const det=[['Alumno','Fecha','Asistencia']];
+  const det=[['Alumno','DNI','Fecha','Asistencia']];
   personalizados.forEach(p=>{
-    p.clases.forEach(c=>det.push([p.nombre,c.fecha,c.val]));
+    p.clases.forEach(c=>det.push([p.nombre,p.dni||'',c.fecha,c.val]));
   });
   const ws2=XLSX.utils.aoa_to_sheet(det);
-  ws2['!cols']=[{wch:30},{wch:14},{wch:12}];
+  ws2['!cols']=[{wch:30},{wch:10},{wch:14},{wch:12}];
   XLSX.utils.book_append_sheet(wb,ws2,'Detalle Clases');
 
-  XLSX.writeFile(wb,`asistencias_personalizados_${today}.xlsx`);
+  XLSX.writeFile(wb,`personalizados_${today}.xlsx`);
 }
 
 // ═══════════════════════════════════════════════════════════════════
