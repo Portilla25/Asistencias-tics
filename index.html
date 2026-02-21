@@ -742,13 +742,15 @@ function renderModule(key){
 function setAsist(key,id,fecha,val){
   const d=state[key];
   if(!d.asistencias[id]) d.asistencias[id]={};
-  if(d.asistencias[id][fecha]===val) delete d.asistencias[id][fecha];
+  const alumno=d.alumnos.find(a=>a.id===id);
+  if(d.asistencias[id][fecha]===val){ delete d.asistencias[id][fecha]; val=''; }
   else{
     d.asistencias[id][fecha]=val;
     if(!d.fechas.includes(fecha)){d.fechas.push(fecha);d.fechas.sort();}
   }
   renderModule(key);
-  scheduleSync();
+  if(alumno) syncAsist(key, id, alumno.nombre, fecha, val);
+  else scheduleSync();
 }
 
 function marcarTodos(key,val){
@@ -757,14 +759,17 @@ function marcarTodos(key,val){
   d.alumnos.forEach(a=>{
     if(!d.asistencias[a.id]) d.asistencias[a.id]={};
     d.asistencias[a.id][fecha]=val;
+    syncAsist(key, a.id, a.nombre, fecha, val);
   });
   if(!d.fechas.includes(fecha)){d.fechas.push(fecha);d.fechas.sort();}
+  localSave();
+  setSyncStatus(GAS_URL?'cloudsaved':'saved');
   renderModule(key);
   showToast('✅ Todos marcados como Presente');
-  scheduleSync();
 }
 
 function eliminarAlumno(key,id){
+  const alumno=state[key].alumnos.find(a=>a.id===id);
   showModal('Eliminar alumno','¿Seguro que deseas eliminar este alumno y todos sus registros?',()=>{
     const d=state[key];
     d.alumnos=d.alumnos.filter(a=>a.id!==id);
@@ -772,7 +777,8 @@ function eliminarAlumno(key,id){
     closeModal();
     renderModule(key);
     showToast('Alumno eliminado');
-    scheduleSync();
+    if(alumno) syncDeleteAlumno(key, alumno.nombre);
+    else scheduleSync();
   });
 }
 
@@ -803,7 +809,8 @@ function showAddAlumnoModal(key){
       closeModal();
       renderModule(key);
       showToast(`✅ "${nombre}" agregado`);
-      scheduleSync();
+      const alumno=d.alumnos.find(a=>a.id===id);
+      syncAddAlumno(key, alumno||{nombre});
     },
     `<div class="form-grid" style="margin-top:4px">
       <div class="fgroup" style="grid-column:1/-1"><div class="flabel">Apellidos y Nombres *</div><input class="finp" id="addNombreInp" placeholder="Ej: García López Ana" autofocus></div>
@@ -849,7 +856,7 @@ function agregarPersonalizado(){
   });
   renderPersonalizados();
   showToast(`✅ "${nombre}" agregado`);
-  scheduleSync();
+  syncPersonalizados();
 }
 
 function registrarClasePersonalizada(pid,fecha,val){
@@ -861,7 +868,7 @@ function registrarClasePersonalizada(pid,fecha,val){
   else p.clases.push({fecha,val});
   p.clases.sort((a,b)=>a.fecha.localeCompare(b.fecha));
   renderPersonalizados();
-  scheduleSync();
+  syncPersonalizados();
 }
 
 function eliminarPersonalizado(pid){
@@ -870,7 +877,7 @@ function eliminarPersonalizado(pid){
     closeModal();
     renderPersonalizados();
     showToast('Alumno eliminado');
-    scheduleSync();
+    syncPersonalizados();
   });
 }
 
@@ -964,7 +971,7 @@ function editarPersonalizado(pid){
     closeModal();
     renderPersonalizados();
     showToast('✅ Datos actualizados');
-    scheduleSync();
+    syncPersonalizados();
   }, html);
   document.getElementById('mOk').textContent='Guardar cambios';
 }
@@ -1081,26 +1088,24 @@ function exportPersonalizados(){
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 💾 SYNC — localStorage (instantáneo) + Google Apps Script (nube)
+// 💾 SYNC — localStorage (instantáneo) + Google Sheets (nube)
 // ═══════════════════════════════════════════════════════════════════
 let GAS_URL    = localStorage.getItem('gas_url') || '';
 let _saveTimer = null;
-let _syncing   = false;
 
-// ── localStorage (siempre activo, instantáneo) ────────────────────
+// ── localStorage ─────────────────────────────────────────────────
 function localSave(){
   try{
     localStorage.setItem('asist_state', JSON.stringify(state));
     localStorage.setItem('asist_pers',  JSON.stringify(personalizados));
-  }catch(e){ console.warn('localStorage lleno',e); }
+  }catch(e){}
 }
-
 function localLoad(){
   try{
     const s=localStorage.getItem('asist_state');
     const p=localStorage.getItem('asist_pers');
     if(s) Object.assign(state, JSON.parse(s));
-    if(p) personalizados = JSON.parse(p);
+    if(p) personalizados=JSON.parse(p);
     return !!(s||p);
   }catch(e){ return false; }
 }
@@ -1117,41 +1122,50 @@ function setSyncStatus(s, msg=''){
     loading:      {icon:'🔄', text:'Cargando...',    color:'var(--yellow)'},
   };
   const m=map[s]||map.saved;
-  el.innerHTML=`<span onclick="showCloudConfig()" style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none" title="Configurar sincronización">${m.icon} ${m.text}</span>`;
+  el.innerHTML=`<span onclick="showCloudConfig()" style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none" title="Configurar Google Sheets">${m.icon} ${m.text}</span>`;
 }
 
-// ── scheduleSync: guarda local YA, nube después ───────────────────
-function scheduleSync(){
-  localSave();                       // ← instantáneo, nunca bloquea UI
-  setSyncStatus(GAS_URL ? 'saving' : 'saved');
+// ── Enviar acción puntual a GAS (no bloquea UI) ───────────────────
+async function gasPost(payload){
   if(!GAS_URL) return;
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(cloudSave, 3000); // espera 3s de inactividad
-}
-
-// ── Google Apps Script API ────────────────────────────────────────
-function getPayload(){
-  return { action:'save', state, personalizados, savedAt:new Date().toISOString() };
-}
-
-async function cloudSave(){
-  if(!GAS_URL || _syncing) return;
-  _syncing = true;
   try{
-    await fetch(GAS_URL, {
-      method:'POST',
-      mode:'no-cors',   // Apps Script no necesita CORS preflight con no-cors
+    // no-cors: la petición llega pero no leemos respuesta (evita CORS error)
+    await fetch(GAS_URL,{
+      method:'POST', mode:'no-cors',
       headers:{'Content-Type':'text/plain'},
-      body: JSON.stringify(getPayload())
+      body: JSON.stringify(payload)
     });
-    // no-cors no devuelve respuesta legible, pero la petición llega
-    setSyncStatus('cloudsaved');
-  }catch(e){
-    console.warn('Cloud save failed (local OK):', e.message);
-    setSyncStatus('error','Sin conexión');
-  }finally{ _syncing=false; }
+  }catch(e){ console.warn('GAS post failed:',e.message); }
 }
 
+// scheduleSync: guarda local YA, notifica nube en background
+function scheduleSync(payload){
+  localSave();
+  setSyncStatus(GAS_URL ? 'cloudsaved' : 'saved');
+  if(GAS_URL && payload) gasPost(payload); // envío inmediato no-cors
+}
+
+// ── Marcar asistencia → escribe celda en Sheets ───────────────────
+function syncAsist(key, alumnoId, nombre, fecha, valor){
+  scheduleSync({ action:'setAsist', key, alumnoId, nombre, fecha, valor });
+}
+
+// ── Agregar alumno → escribe fila en Sheets ───────────────────────
+function syncAddAlumno(key, alumno){
+  scheduleSync({ action:'addAlumno', key, alumno });
+}
+
+// ── Eliminar alumno ───────────────────────────────────────────────
+function syncDeleteAlumno(key, nombre){
+  scheduleSync({ action:'deleteAlumno', key, nombre });
+}
+
+// ── Guardar personalizados ────────────────────────────────────────
+function syncPersonalizados(){
+  scheduleSync({ action:'savePersonalizados', personalizados });
+}
+
+// ── Cargar datos completos desde Sheets al abrir ──────────────────
 async function cloudLoad(){
   if(!GAS_URL){
     const ok=localLoad();
@@ -1161,27 +1175,24 @@ async function cloudLoad(){
   }
   setSyncStatus('loading');
   try{
-    const res = await fetch(`${GAS_URL}?action=load`, { method:'GET' });
+    const res=await fetch(`${GAS_URL}?action=load`);
     if(!res.ok) throw new Error(res.status);
-    const data = await res.json();
+    const data=await res.json();
     if(data && data.state){
       Object.assign(state, data.state);
-      if(data.personalizados) personalizados = data.personalizados;
+      if(data.personalizados) personalizados=data.personalizados;
       localSave();
       refreshCurrentPage();
       setSyncStatus('cloudsaved');
       showToast('🟢 Datos cargados desde Google Sheets');
     } else {
-      // Hoja vacía — subir lo local
-      const ok=localLoad();
-      if(ok){ refreshCurrentPage(); scheduleSync(); }
-      setSyncStatus('cloudsaved');
+      localLoad(); refreshCurrentPage(); setSyncStatus('cloudsaved');
     }
   }catch(e){
-    console.warn('Cloud load failed:', e);
+    console.warn('cloudLoad failed:',e);
     const ok=localLoad();
     if(ok){ refreshCurrentPage(); showToast('💾 Cargado desde este dispositivo'); }
-    setSyncStatus('error','Sin conexión a nube');
+    setSyncStatus('error','Sin conexión');
   }
 }
 
@@ -1193,40 +1204,39 @@ function refreshCurrentPage(){
 
 // ── Config modal ──────────────────────────────────────────────────
 function showCloudConfig(){
-  const connected = !!GAS_URL;
+  const connected=!!GAS_URL;
   const html=`
   <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:.79rem;color:var(--muted);line-height:1.9;margin-bottom:14px;">
-    <strong style="color:var(--text);font-size:.85rem;">⚙️ Pasos para conectar Google Sheets</strong><br>
-    <span style="color:var(--muted2);font-size:.73rem;">Hazlo una sola vez — luego todo es automático</span>
-    <ol style="margin:10px 0 0 16px;display:flex;flex-direction:column;gap:4px;">
+    <strong style="color:var(--text);font-size:.85rem;">📋 Conectar con Google Sheets</strong><br>
+    <span style="font-size:.72rem;color:var(--muted2)">Una sola vez — luego todo es automático</span>
+    <ol style="margin:10px 0 0 16px;display:flex;flex-direction:column;gap:3px;">
       <li>Ve a <a href="https://script.google.com" target="_blank" style="color:var(--amber)">script.google.com</a> → <strong style="color:var(--text)">Nuevo proyecto</strong></li>
-      <li>Borra el código que viene y pega el código del archivo <code style="background:var(--s3);padding:1px 5px;border-radius:3px;font-size:.72rem">Code.gs</code> que descargaste</li>
-      <li>Clic en <strong style="color:var(--text)">Implementar → Nueva implementación</strong></li>
-      <li>Tipo: <strong style="color:var(--text)">Aplicación web</strong> · Acceso: <strong style="color:var(--text)">Cualquier usuario</strong></li>
-      <li>Clic en <strong style="color:var(--text)">Implementar</strong> → copia la URL que aparece</li>
-      <li>Pégala abajo ↓</li>
+      <li>Borra el código por defecto y pega el contenido de <code style="background:var(--s3);padding:1px 5px;border-radius:3px">Code.gs</code></li>
+      <li>Reemplaza <code style="background:var(--s3);padding:1px 5px;border-radius:3px">TU_ID_AQUI</code> con el ID de tu Google Sheet</li>
+      <li><strong style="color:var(--text)">Implementar → Nueva implementación → Aplicación web</strong></li>
+      <li>Ejecutar como: <strong style="color:var(--text)">Yo</strong> · Acceso: <strong style="color:var(--text)">Cualquier usuario</strong></li>
+      <li>Autorizar → copiar la URL → pegarla abajo</li>
     </ol>
     <div style="margin-top:10px;padding:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.2);border-radius:6px;color:var(--green);font-size:.73rem;">
-      💾 Tus datos están guardados en este navegador. No perderás nada mientras configuras.
+      💾 Tus datos están seguros en este navegador mientras configuras.
     </div>
   </div>
   <div class="fgroup">
     <div class="flabel">URL de tu Apps Script</div>
-    <input class="finp" id="gasUrlInp" placeholder="https://script.google.com/macros/s/AKfy.../exec" value="${GAS_URL}" style="font-size:.74rem;">
+    <input class="finp" id="gasUrlInp" placeholder="https://script.google.com/macros/s/.../exec" value="${GAS_URL}" style="font-size:.73rem;">
   </div>
-  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Conectado actualmente</div>`:''}`;
+  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Actualmente conectado</div>`:''}`;
 
   showModal('☁️ Sincronización con Google Sheets','',async()=>{
     const url=document.getElementById('gasUrlInp')?.value.trim();
-    if(!url){ showToast('⚠️ Pega la URL de tu Apps Script'); return; }
-    if(!url.includes('script.google.com')){ showToast('⚠️ La URL no parece válida'); return; }
-    GAS_URL=url;
-    localStorage.setItem('gas_url',url);
+    if(!url){showToast('⚠️ Pega la URL del Apps Script');return;}
+    if(!url.includes('script.google.com')){showToast('⚠️ URL no válida');return;}
+    GAS_URL=url; localStorage.setItem('gas_url',url);
     closeModal();
-    showToast('✅ URL guardada. Sincronizando...');
+    showToast('✅ Conectado. Cargando datos de Sheets...');
     await cloudLoad();
-  },html);
-  document.getElementById('mOk').textContent = connected ? 'Actualizar URL' : 'Conectar';
+  }, html);
+  document.getElementById('mOk').textContent=connected?'Actualizar URL':'Conectar';
 
   if(connected){
     setTimeout(()=>{
