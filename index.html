@@ -1160,6 +1160,7 @@ function syncAddAlumno(key, alumno){
   gasPost({ action:'addAlumno', key, alumno:{
     nombre: alumno.nombre||'',
     dni:    alumno.dni||'',
+    correo: alumno.correo||'',
     fecha:  alumno.fecha||'',
     cel:    alumno.cel||'',
     edad:   alumno.edad||''
@@ -1198,11 +1199,23 @@ async function cloudLoad(){
   const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
   let ok=0;
   for(const key of keys){
-    const loaded=await loadModuleFromSheets(key);
-    if(loaded) ok++;
+    try{
+      const r=await gasGet({ action:'load', key });
+      if(r.ok){
+        // Reconstruir IDs como números para consistencia
+        const alumnos=(r.alumnos||[]).map(a=>({...a, id:Number(a.id)}));
+        const asistencias={};
+        Object.keys(r.asistencias||{}).forEach(k=>{ asistencias[Number(k)]=r.asistencias[k]; });
+        state[key]={ alumnos, asistencias, fechas:r.fechas||[] };
+        ok++;
+      }
+    }catch(e){ console.warn('loadModule',key,e.message); }
   }
   // Personalizados siempre del local
-  localLoad();
+  try{
+    const p=localStorage.getItem('asist_pers');
+    if(p) personalizados=JSON.parse(p);
+  }catch(e){}
   localSave();
   refreshCurrentPage();
   if(ok>0){
