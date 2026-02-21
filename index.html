@@ -379,7 +379,7 @@ tr:hover td{background:rgba(245,158,11,.03);}
     <button class="hamburger" onclick="toggleSidebar()" title="Menú">☰</button>
     <div class="topbar-title" id="topbarTitle">Resumen General</div>
     <div id="syncIndicator"></div>
-    <button class="btn btn-outline" style="font-size:.72rem;padding:5px 10px" onclick="showCloudConfig()" title="Configurar guardado en la nube">☁️ Nube</button>
+    <button class="btn btn-outline" style="font-size:.72rem;padding:5px 10px" onclick="showCloudConfig()" title="Configurar Google Sheets">☁️ Sheets</button>
     <div class="topbar-date" id="topbarDate"></div>
   </div>
 
@@ -781,9 +781,6 @@ function eliminarAlumno(key,id){
     if(alumno?.fila) syncDeleteAlumno(key, alumno.fila);
   });
 }
-    else scheduleSync();
-  });
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // ADD ALUMNO MODAL (módulos)
@@ -1091,12 +1088,11 @@ function exportPersonalizados(){
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 💾 SYNC — localStorage + Google Sheets bidireccional
+// 💾 SYNC — localStorage (instantáneo) + Google Sheets (background)
 // ═══════════════════════════════════════════════════════════════════
-let GAS_URL    = localStorage.getItem('gas_url') || '';
-let _syncing   = false;
+let GAS_URL = localStorage.getItem('gas_url') || '';
 
-// ── localStorage (siempre activo, instantáneo) ────────────────────
+// ── localStorage ──────────────────────────────────────────────────
 function localSave(){
   try{
     localStorage.setItem('asist_state', JSON.stringify(state));
@@ -1113,83 +1109,83 @@ function localLoad(){
   }catch(e){ return false; }
 }
 
-// ── Indicador de estado ───────────────────────────────────────────
+// ── Indicador ─────────────────────────────────────────────────────
 function setSyncStatus(s, msg=''){
   const el=document.getElementById('syncIndicator'); if(!el) return;
   const map={
-    saved:        {icon:'💾', text:'Guardado',      color:'var(--green)'},
-    cloudsaved:   {icon:'🟢', text:'Sincronizado',  color:'var(--green)'},
-    saving:       {icon:'🔄', text:'Guardando...',  color:'var(--yellow)'},
-    error:        {icon:'🔴', text:msg||'Error',    color:'var(--red)'},
+    saved:        {icon:'💾', text:'Guardado',       color:'var(--green)'},
+    cloudsaved:   {icon:'🟢', text:'Sincronizado',   color:'var(--green)'},
+    saving:       {icon:'🔄', text:'Guardando...',   color:'var(--yellow)'},
+    loading:      {icon:'🔄', text:'Cargando...',    color:'var(--yellow)'},
+    error:        {icon:'🔴', text:msg||'Error',     color:'var(--red)'},
     unconfigured: {icon:'☁️', text:'Conectar Sheets',color:'var(--muted)'},
-    loading:      {icon:'🔄', text:'Cargando...',   color:'var(--yellow)'},
   };
   const m=map[s]||map.saved;
-  el.innerHTML=`<span onclick="showCloudConfig()" style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none" title="Configurar Google Sheets">${m.icon} ${m.text}</span>`;
+  el.innerHTML=`<span onclick="showCloudConfig()" style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer" title="Configurar Google Sheets">${m.icon} ${m.text}</span>`;
 }
 
-// ── scheduleSync: guarda local INMEDIATAMENTE, UI nunca se bloquea ─
+// ── scheduleSync: guarda local YA — nunca bloquea UI ──────────────
 function scheduleSync(){
   localSave();
   setSyncStatus(GAS_URL ? 'cloudsaved' : 'saved');
 }
 
-// ── GAS POST (fire-and-forget, no bloquea UI) ─────────────────────
+// ── GAS POST fire-and-forget (no bloquea UI) ──────────────────────
 function gasPost(payload){
   if(!GAS_URL) return;
-  fetch(GAS_URL, {
-    method:'POST',
-    mode:'no-cors',               // evita preflight CORS
+  fetch(GAS_URL,{
+    method:'POST', mode:'no-cors',
     headers:{'Content-Type':'text/plain'},
-    body: JSON.stringify(payload)
-  }).catch(e=>console.warn('GAS sync:',e.message));
+    body:JSON.stringify(payload)
+  }).catch(e=>console.warn('GAS post:',e.message));
 }
 
-// ── GAS GET (carga datos — sí lee respuesta) ──────────────────────
+// ── GAS GET (sí lee respuesta) ────────────────────────────────────
 async function gasGet(params){
-  const url = GAS_URL + '?' + new URLSearchParams(params).toString();
-  const res  = await fetch(url, { method:'GET' });
+  const url=GAS_URL+'?'+new URLSearchParams(params).toString();
+  const res=await fetch(url);
   if(!res.ok) throw new Error(res.status);
   return res.json();
 }
 
-// ── Acciones de sync específicas ──────────────────────────────────
-
-// Registrar asistencia → escribe celda en Sheets en background
+// ── Sync actions ──────────────────────────────────────────────────
 function syncAsist(key, alumnoId, fecha, valor){
-  const [t]=key.split('-');
-  const alumno=state[key].alumnos.find(a=>a.id===alumnoId);
+  const alumno=state[key]?.alumnos.find(a=>a.id===alumnoId);
   if(!alumno?.fila) return;
-  gasPost({ action:'setAsist', turno:t, fila:alumno.fila, fecha, valor });
+  gasPost({ action:'setAsist', key, fila:alumno.fila, fecha, valor });
 }
 
-// Agregar alumno → añade fila en Sheets
-async function syncAddAlumno(key, alumno){
-  if(!GAS_URL) return null;
-  const [t]=key.split('-');
-  try{
-    const res = await fetch(GAS_URL,{
-      method:'POST',
-      mode:'no-cors',
-      headers:{'Content-Type':'text/plain'},
-      body: JSON.stringify({ action:'addAlumno', turno:t, alumno })
-    });
-    // no-cors no devuelve datos legibles — recargar para obtener fila real
-    return null;
-  }catch(e){ return null; }
+function syncAddAlumno(key, alumno){
+  if(!alumno) return;
+  gasPost({ action:'addAlumno', key, alumno:{
+    nombre: alumno.nombre||'',
+    dni:    alumno.dni||'',
+    fecha:  alumno.fecha||'',
+    cel:    alumno.cel||'',
+    edad:   alumno.edad||''
+  }});
 }
 
-// Eliminar alumno → borra fila en Sheets
 function syncDeleteAlumno(key, fila){
-  if(!GAS_URL||!fila) return;
-  const [t]=key.split('-');
-  gasPost({ action:'deleteAlumno', turno:t, fila });
+  if(!fila) return;
+  gasPost({ action:'deleteAlumno', key, fila });
 }
 
-// Guardar personalizados (localStorage backup)
 function syncPersonalizados(){ localSave(); }
 
-// ── Cargar TODO desde Sheets al abrir ────────────────────────────
+// ── Cargar UN módulo desde Sheets ─────────────────────────────────
+async function loadModuleFromSheets(key){
+  try{
+    const r=await gasGet({ action:'load', key });
+    if(r.ok && r.alumnos){
+      state[key]={ alumnos:r.alumnos, asistencias:r.asistencias||{}, fechas:r.fechas||[] };
+      return true;
+    }
+  }catch(e){ console.warn('loadModule',key,e.message); }
+  return false;
+}
+
+// ── Cargar todos los módulos desde Sheets ─────────────────────────
 async function cloudLoad(){
   if(!GAS_URL){
     const ok=localLoad();
@@ -1198,31 +1194,23 @@ async function cloudLoad(){
     return;
   }
   setSyncStatus('loading');
-  try{
-    // Cargar Turno Mañana
-    const rM = await gasGet({ action:'load', turno:'M' });
-    if(rM.ok){
-      // Modules M-1 a M-4 comparten la misma hoja; guardamos en M-1 por ahora
-      // (si quieres separar por módulo, añade col "Módulo" en tu Sheet)
-      state['M-1'] = { alumnos: rM.alumnos||[], asistencias: rM.asistencias||{}, fechas: rM.fechas||[] };
-    }
-    // Cargar Turno Tarde
-    const rT = await gasGet({ action:'load', turno:'T' });
-    if(rT.ok){
-      state['T-1'] = { alumnos: rT.alumnos||[], asistencias: rT.asistencias||{}, fechas: rT.fechas||[] };
-    }
-    // Cargar personalizados del localStorage (no están en Sheets)
-    localLoad();
-    localSave();
-    refreshCurrentPage();
+  showToast('🔄 Cargando alumnos desde Google Sheets...');
+  const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
+  let ok=0;
+  for(const key of keys){
+    const loaded=await loadModuleFromSheets(key);
+    if(loaded) ok++;
+  }
+  // Personalizados siempre del local
+  localLoad();
+  localSave();
+  refreshCurrentPage();
+  if(ok>0){
     setSyncStatus('cloudsaved');
-    showToast('🟢 Datos cargados desde Google Sheets');
-  }catch(e){
-    console.warn('cloudLoad error:',e);
-    localLoad();
-    refreshCurrentPage();
-    setSyncStatus('error','Sin conexión a Sheets');
-    showToast('💾 Cargado desde este navegador (Sheets no disponible)');
+    showToast(`🟢 ${ok} módulo(s) cargados desde Google Sheets`);
+  } else {
+    setSyncStatus('error','No se pudo cargar');
+    showToast('⚠️ No se pudo conectar con Sheets. Verifica tu URL.');
   }
 }
 
@@ -1239,13 +1227,15 @@ function showCloudConfig(){
   <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:.79rem;color:var(--muted);line-height:1.85;margin-bottom:14px;">
     <strong style="color:var(--text);font-size:.88rem;">📋 Conectar con Google Sheets</strong>
     <span style="display:block;font-size:.71rem;color:var(--muted2);margin-bottom:8px;">Solo una vez — luego todo es automático</span>
-    <ol style="margin:0 0 0 16px;display:flex;flex-direction:column;gap:3px;">
-      <li>Abre tu Google Sheet → copia el <strong style="color:var(--text)">ID de la URL</strong><br>
-        <span style="font-size:.71rem;color:var(--muted2)">docs.google.com/spreadsheets/d/<strong style="color:var(--amber)">[ESTE_ID]</strong>/edit</span></li>
-      <li>Ve a <a href="https://script.google.com" target="_blank" style="color:var(--amber)">script.google.com</a> → <strong style="color:var(--text)">Nuevo proyecto</strong></li>
-      <li>Pega el código del archivo <code style="background:var(--s3);padding:1px 6px;border-radius:3px">Code.gs</code> que descargaste y pon tu ID de Sheet</li>
-      <li><strong style="color:var(--text)">Implementar → Nueva implementación → Aplicación web</strong></li>
-      <li>Ejecutar como: <strong style="color:var(--text)">Yo</strong> · Acceso: <strong style="color:var(--text)">Cualquier usuario</strong></li>
+    <ol style="margin:0 0 0 16px;display:flex;flex-direction:column;gap:4px;">
+      <li>Crea estas 8 hojas en tu Google Sheet:<br>
+        <code style="background:var(--s3);padding:2px 6px;border-radius:3px;font-size:.7rem">Mañana M1, Mañana M2, Mañana M3, Mañana M4, Tarde M1, Tarde M2, Tarde M3, Tarde M4</code></li>
+      <li>Cada hoja con cabecera en fila 1:<br>
+        <code style="background:var(--s3);padding:2px 6px;border-radius:3px;font-size:.7rem">Nombres y Apellidos | DNI | NACIMIENTO | CELULAR | EDAD</code></li>
+      <li>Copia el <strong style="color:var(--text)">ID de tu Sheet</strong> desde la URL y pégalo en el archivo <code style="background:var(--s3);padding:1px 5px;border-radius:3px">Code.gs</code></li>
+      <li>Ve a <a href="https://script.google.com" target="_blank" style="color:var(--amber)">script.google.com</a> → Nuevo proyecto → pega el código del <code style="background:var(--s3);padding:1px 5px;border-radius:3px">Code.gs</code></li>
+      <li><strong style="color:var(--text)">Implementar → Nueva implementación → Aplicación web</strong><br>
+        Ejecutar como: <strong style="color:var(--text)">Yo</strong> · Acceso: <strong style="color:var(--text)">Cualquier usuario</strong></li>
       <li>Autorizar → copiar URL → pegarla abajo ↓</li>
     </ol>
     <div style="margin-top:10px;padding:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.2);border-radius:6px;font-size:.72rem;color:var(--green);">
@@ -1256,16 +1246,14 @@ function showCloudConfig(){
     <div class="flabel">URL del Apps Script</div>
     <input class="finp" id="gasUrlInp" placeholder="https://script.google.com/macros/s/.../exec" value="${GAS_URL}" style="font-size:.73rem;">
   </div>
-  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Actualmente conectado · <a href="#" onclick="cloudLoad();closeModal();return false;" style="color:var(--amber)">Recargar desde Sheets</a></div>`:''}`;
+  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Actualmente conectado · <span onclick="cloudLoad();closeModal();" style="color:var(--amber);cursor:pointer">Recargar desde Sheets</span></div>`:''}`;
 
   showModal('☁️ Sincronización con Google Sheets','',async()=>{
     const url=document.getElementById('gasUrlInp')?.value.trim();
     if(!url){showToast('⚠️ Pega la URL del Apps Script');return;}
     if(!url.includes('script.google.com')){showToast('⚠️ La URL no parece válida');return;}
-    GAS_URL=url;
-    localStorage.setItem('gas_url',url);
+    GAS_URL=url; localStorage.setItem('gas_url',url);
     closeModal();
-    showToast('✅ URL guardada. Cargando desde Sheets...');
     await cloudLoad();
   },html);
   document.getElementById('mOk').textContent=connected?'Actualizar URL':'Conectar';
@@ -1286,7 +1274,7 @@ function showCloudConfig(){
   }
 }
 
-// ── INIT ─────────────────────────────────────────────────────────
+// ── INIT ──────────────────────────────────────────────────────────
 (function initData(){
   if(GAS_URL){ cloudLoad(); }
   else{
