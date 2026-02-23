@@ -277,8 +277,48 @@ tr:hover td{background:rgba(245,158,11,.03);}
   transform:translateY(60px);opacity:0;transition:all .28s;pointer-events:none;
   max-width:320px;line-height:1.4;
 }
-.toast.show{transform:translateY(0);opacity:1;}
+/* ── PROFILE MODAL ───────────────────────────────────── */
+.profile-modal{max-width:560px;}
+.profile-header{display:flex;gap:16px;align-items:center;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);}
+.profile-avatar{
+  width:64px;height:64px;border-radius:50%;
+  background:var(--s3);border:2px solid var(--border2);
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.6rem;flex-shrink:0;overflow:hidden;
+}
+.profile-avatar img{width:100%;height:100%;object-fit:cover;}
+.profile-name{font-size:1.05rem;font-weight:700;}
+.profile-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
+.pf-item{background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;}
+.pf-label{font-size:.68rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;}
+.pf-val{font-size:.83rem;font-weight:600;}
 
+/* ── CHART ───────────────────────────────────────────── */
+.chart-wrap{background:var(--s2);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;}
+.chart-title{font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;}
+.chart-bars{display:flex;gap:6px;align-items:flex-end;height:80px;}
+.chart-bar-col{display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;min-width:0;}
+.chart-bar{width:100%;border-radius:4px 4px 0 0;transition:height .4s ease;min-height:2px;}
+.chart-bar-label{font-size:.6rem;color:var(--muted);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+.chart-bar-val{font-size:.65rem;font-weight:700;}
+
+/* ── MOTIVO MODAL ────────────────────────────────────── */
+.motivo-grid{display:flex;flex-direction:column;gap:10px;margin-top:8px;}
+.foto-preview{
+  width:100%;height:120px;border-radius:8px;
+  border:2px dashed var(--border2);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;color:var(--muted);font-size:.8rem;gap:8px;
+  background:var(--s2);transition:border-color .2s;overflow:hidden;
+}
+.foto-preview:hover{border-color:var(--amber);}
+.foto-preview img{width:100%;height:100%;object-fit:cover;border-radius:6px;}
+
+/* ── ASIST BUTTON with motivo indicator ─────────────── */
+.ab.has-motivo::after{content:'📎';font-size:.6rem;position:absolute;top:-3px;right:-3px;}
+.ab{position:relative;}
+
+.toast.show{transform:translateY(0);opacity:1;}
 /* ── MODAL ───────────────────────────────────────────── */
 .overlay{
   display:none;position:fixed;inset:0;
@@ -468,7 +508,7 @@ const MOD_NAMES = ['','Módulo 1','Módulo 2','Módulo 3','Módulo 4'];
 
 // Init all module states empty
 ['M','T'].forEach(t=>[1,2,3,4].forEach(m=>{
-  state[`${t}-${m}`] = { alumnos:[], asistencias:{}, fechas:[] };
+  state[`${t}-${m}`] = { alumnos:[], asistencias:{}, fechas:[], motivos:{} };
 }));
 
 // ── Init UI ────────────────────────────────────────────────────────
@@ -585,6 +625,11 @@ function buildModulePage(key){
       </tr></thead>
       <tbody id="tbody-${key}"></tbody>
     </table>
+  </div>
+  <!-- Gráfica -->
+  <div class="chart-wrap" style="margin-top:16px">
+    <div class="chart-title">📊 Asistencia por fecha — últimas 10 clases</div>
+    <div id="chart-${key}"><div style="color:var(--muted);font-size:.78rem;text-align:center;padding:16px">Sin datos aún</div></div>
   </div>`;
 }
 
@@ -695,22 +740,23 @@ function renderModule(key){
     const barCol=pct>=80?'var(--green)':pct>=60?'var(--yellow)':'var(--red)';
 
     const tr=document.createElement('tr');
+    const motivoHoy = (d.motivos && d.motivos[a.id] && d.motivos[a.id][fecha]) || null;
     tr.innerHTML=`
       <td style="color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:.75rem">${idx+1}</td>
       <td>
-        <div class="aname">${a.nombre}</div>
-        ${enAlerta?`<div class="asub" style="color:var(--red)">⚠️ ${totalF} falta(s) acumulada(s)</div>`:''}
+        <div class="aname" onclick="showPerfil('${key}',${a.id})" style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px">${a.nombre}</div>
+        ${enAlerta?`<div class="asub" style="color:var(--red)">⚠️ ${totalF} falta(s)</div>`:''}
       </td>
       <td>
         <div class="abgroup">
-          <button class="ab${hoy==='Presente'?' presente':''}" onclick="setAsist('${key}',${a.id},'${fecha}','Presente')">✅ Presente</button>
-          <button class="ab${hoy==='Falta'?' falta':''}"    onclick="setAsist('${key}',${a.id},'${fecha}','Falta')">❌ Falta</button>
-          <button class="ab${hoy==='Permiso'?' permiso':''}" onclick="setAsist('${key}',${a.id},'${fecha}','Permiso')">🔵 Permiso</button>
+          <button class="ab${hoy==='Presente'?' presente':''}" onclick="setAsist('${key}',${a.id},'${fecha}','Presente')">✅ P</button>
+          <button class="ab${hoy==='Falta'?' falta':''}${motivoHoy&&hoy==='Falta'?' has-motivo':''}" onclick="setAsistConMotivo('${key}',${a.id},'${fecha}','Falta')">❌ F</button>
+          <button class="ab${hoy==='Permiso'?' permiso':''}${motivoHoy&&hoy==='Permiso'?' has-motivo':''}" onclick="setAsistConMotivo('${key}',${a.id},'${fecha}','Permiso')">🔵 Pm</button>
         </div>
       </td>
       <td>
         <div class="hdots">
-          ${hist.map(f=>{const v=reg[f]||'none';return`<div class="hd ${v}" title="${f}: ${v}"></div>`;}).join('')}
+          ${hist.map(f=>{const v=reg[f]||'none';const mv=(d.motivos&&d.motivos[a.id]&&d.motivos[a.id][f]);return`<div class="hd ${v}" title="${f}: ${v}${mv?'\n📎 '+mv.texto:''}" style="${mv?'box-shadow:0 0 0 1.5px var(--amber)':''}"></div>`;}).join('')}
         </div>
       </td>
       <td>
@@ -737,6 +783,8 @@ function renderModule(key){
     document.getElementById(`alertTxt-${key}`).innerHTML=
       `<strong>${enAlertaList.length} alumno(s) con ${thr}+ faltas:</strong> ${enAlertaList.map(a=>a.nombre.split(' ')[0]).join(', ')}`;
   } else ab.classList.remove('show');
+
+  renderChart(key);
 }
 
 function setAsist(key,id,fecha,val){
@@ -750,8 +798,194 @@ function setAsist(key,id,fecha,val){
     if(!d.fechas.includes(fecha)){d.fechas.push(fecha);d.fechas.sort();}
   }
   renderModule(key);
-  scheduleSync();                    // guarda local inmediatamente
-  syncAsist(key, id, fecha, val);   // escribe en Sheets en background
+  scheduleSync();
+  syncAsist(key, id, fecha, val);
+  checkAndSendAlert(key, id);
+}
+
+// ── Falta/Permiso con motivo y foto ───────────────────────────────
+function setAsistConMotivo(key,id,fecha,val){
+  const d=state[key];
+  if(!d.asistencias[id]) d.asistencias[id]={};
+  // Si ya está marcado con este valor → toggle off
+  if(d.asistencias[id][fecha]===val){
+    delete d.asistencias[id][fecha];
+    if(!d.motivos) d.motivos={};
+    if(d.motivos[id]) delete d.motivos[id][fecha];
+    renderModule(key); scheduleSync(); syncAsist(key,id,fecha,''); return;
+  }
+  // Mostrar modal de motivo
+  const alumno=d.alumnos.find(a=>a.id===id);
+  const existing=(d.motivos&&d.motivos[id]&&d.motivos[id][fecha])||{};
+  const icon=val==='Falta'?'❌':'🔵';
+  const html=`
+  <div class="motivo-grid">
+    <div>
+      <div class="flabel">Motivo de la ${val.toLowerCase()}</div>
+      <textarea class="finp" id="motivoTxt" rows="3" placeholder="Describe el motivo..." style="resize:vertical">${existing.texto||''}</textarea>
+    </div>
+    <div>
+      <div class="flabel" style="margin-bottom:6px">Foto de evidencia (opcional)</div>
+      <div class="foto-preview" id="fotoPreview" onclick="document.getElementById('fotoInput').click()">
+        ${existing.foto?`<img src="${existing.foto}" alt="evidencia">`:'📷 Clic para subir foto'}
+      </div>
+      <input type="file" id="fotoInput" accept="image/*" style="display:none" onchange="previewFoto(this)">
+      ${existing.foto?`<button class="btn btn-red" style="font-size:.7rem;margin-top:6px;padding:3px 8px" onclick="clearFoto()">✕ Quitar foto</button>`:''}
+    </div>
+  </div>`;
+
+  showModal(`${icon} ${val} — ${alumno?.nombre||''}`, '', ()=>{
+    const texto=document.getElementById('motivoTxt')?.value.trim()||'';
+    const fotoEl=document.getElementById('fotoPreview')?.querySelector('img');
+    const foto=fotoEl?fotoEl.src:(existing.foto||'');
+    // Guardar asistencia
+    d.asistencias[id][fecha]=val;
+    if(!d.fechas.includes(fecha)){d.fechas.push(fecha);d.fechas.sort();}
+    // Guardar motivo
+    if(!d.motivos) d.motivos={};
+    if(!d.motivos[id]) d.motivos[id]={};
+    d.motivos[id][fecha]={ texto, foto, tipo:val };
+    closeModal();
+    renderModule(key);
+    scheduleSync();
+    syncAsist(key,id,fecha,val);
+    checkAndSendAlert(key,id);
+    showToast(`${icon} ${val} registrada${texto?' con motivo':''}`);
+  }, html);
+  document.getElementById('mOk').textContent=`Guardar ${val}`;
+  // Resize modal for this content
+  setTimeout(()=>{
+    const m=document.querySelector('.modal');
+    if(m) m.style.maxWidth='520px';
+  },10);
+}
+
+window._fotoBase64='';
+function previewFoto(input){
+  const file=input.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const prev=document.getElementById('fotoPreview');
+    if(prev) prev.innerHTML=`<img src="${e.target.result}" alt="evidencia">`;
+    window._fotoBase64=e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function clearFoto(){
+  const prev=document.getElementById('fotoPreview');
+  if(prev) prev.innerHTML='📷 Clic para subir foto';
+  window._fotoBase64='';
+}
+
+// ── Perfil completo del alumno ────────────────────────────────────
+function showPerfil(key,id){
+  const d=state[key];
+  const a=d.alumnos.find(x=>x.id===id); if(!a) return;
+  const reg=d.asistencias[a.id]||{};
+  const motivos=d.motivos||{};
+  const P=Object.values(reg).filter(v=>v==='Presente').length;
+  const F=Object.values(reg).filter(v=>v==='Falta').length;
+  const Pm=Object.values(reg).filter(v=>v==='Permiso').length;
+  const tot=d.fechas.length;
+  const pct=tot>0?Math.round(((P+Pm)/tot)*100):0;
+  const pcol=pct>=80?'var(--green)':pct>=60?'var(--yellow)':'var(--red)';
+
+  // Historial de clases con motivos
+  const histHtml=d.fechas.length===0
+    ?'<div style="color:var(--muted);font-size:.8rem;text-align:center;padding:12px">Sin clases registradas</div>'
+    :d.fechas.slice().reverse().map(f=>{
+      const v=reg[f]||'—';
+      const mv=motivos[a.id]?.[f];
+      const col=v==='Presente'?'var(--green)':v==='Falta'?'var(--red)':v==='Permiso'?'var(--blue)':'var(--muted)';
+      return`<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border);font-size:.78rem">
+        <span style="color:var(--muted);min-width:82px;font-family:'JetBrains Mono',monospace">${f}</span>
+        <span style="color:${col};font-weight:600;min-width:60px">${v}</span>
+        ${mv?`<div style="flex:1">
+          ${mv.texto?`<div style="color:var(--muted2)">${mv.texto}</div>`:''}
+          ${mv.foto?`<img src="${mv.foto}" style="max-width:80px;max-height:60px;border-radius:5px;margin-top:4px;object-fit:cover;cursor:pointer" onclick="window.open('${mv.foto}','_blank')">`:''}
+        </div>`:''}
+      </div>`;
+    }).join('');
+
+  const html=`
+  <div class="profile-header">
+    <div class="profile-avatar">${a.nombre.charAt(0).toUpperCase()}</div>
+    <div>
+      <div class="profile-name">${a.nombre}</div>
+      <div style="font-size:.75rem;color:var(--muted);margin-top:3px">${key.replace('M-','Mañana M').replace('T-','Tarde M')}</div>
+      <div style="font-size:.85rem;font-weight:700;color:${pcol};margin-top:4px">${pct}% asistencia</div>
+    </div>
+  </div>
+  <div class="profile-fields">
+    ${a.dni?`<div class="pf-item"><div class="pf-label">DNI</div><div class="pf-val">${a.dni}</div></div>`:''}
+    ${a.cel?`<div class="pf-item"><div class="pf-label">Celular</div><div class="pf-val">${a.cel}</div></div>`:''}
+    ${a.correo?`<div class="pf-item" style="grid-column:1/-1"><div class="pf-label">Correo</div><div class="pf-val">${a.correo}</div></div>`:''}
+    ${a.fecha?`<div class="pf-item"><div class="pf-label">Nacimiento</div><div class="pf-val">${a.fecha}</div></div>`:''}
+    ${a.edad?`<div class="pf-item"><div class="pf-label">Edad</div><div class="pf-val">${a.edad} años</div></div>`:''}
+  </div>
+  <!-- Mini chart -->
+  <div class="chart-wrap">
+    <div class="chart-title">Resumen de asistencia</div>
+    <div style="display:flex;gap:16px;align-items:center">
+      ${[['Presentes',P,'var(--green)'],['Faltas',F,'var(--red)'],['Permisos',Pm,'var(--blue)'],['Total clases',tot,'var(--muted)']].map(([l,n,c])=>
+        `<div style="text-align:center"><div style="font-size:1.4rem;font-weight:800;color:${c}">${n}</div><div style="font-size:.68rem;color:var(--muted)">${l}</div></div>`
+      ).join('')}
+    </div>
+  </div>
+  <!-- Historial -->
+  <div style="font-size:.76rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Historial de clases</div>
+  <div style="max-height:220px;overflow-y:auto">${histHtml}</div>`;
+
+  showModal('👤 Perfil del alumno','', null, html);
+  document.getElementById('mOk').style.display='none';
+  setTimeout(()=>{
+    const m=document.querySelector('.modal');
+    if(m) m.style.maxWidth='580px';
+  },10);
+}
+
+// ── Gráfica de asistencia por módulo ─────────────────────────────
+function renderChart(key){
+  const el=document.getElementById(`chart-${key}`); if(!el) return;
+  const d=state[key];
+  if(!d||d.fechas.length===0){ el.innerHTML='<div style="color:var(--muted);font-size:.78rem;text-align:center;padding:16px">Sin datos aún</div>'; return; }
+  // Últimas 10 fechas
+  const fechas=d.fechas.slice(-10);
+  const maxH=60;
+  el.innerHTML=`<div class="chart-bars">`+fechas.map(f=>{
+    const total=d.alumnos.length||1;
+    const P=d.alumnos.filter(a=>(d.asistencias[a.id]||{})[f]==='Presente').length;
+    const pct=Math.round((P/total)*100);
+    const h=Math.max(4,Math.round((pct/100)*maxH));
+    const col=pct>=80?'var(--green)':pct>=60?'var(--yellow)':'var(--red)';
+    const short=f.slice(5).replace('-','/');
+    return`<div class="chart-bar-col">
+      <div class="chart-bar-val" style="color:${col}">${pct}%</div>
+      <div class="chart-bar" style="height:${h}px;background:${col}"></div>
+      <div class="chart-bar-label">${short}</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+// ── Alerta por correo ─────────────────────────────────────────────
+function checkAndSendAlert(key,id){
+  if(!GAS_URL) return;
+  const d=state[key];
+  const a=d.alumnos.find(x=>x.id===id); if(!a||!a.correo) return;
+  const thr=parseInt(document.getElementById(`thr-${key}`)?.value||3);
+  const faltas=Object.values(d.asistencias[id]||{}).filter(v=>v==='Falta').length;
+  if(faltas===thr){ // solo al alcanzar exactamente el umbral
+    const [t,m]=key.split('-');
+    gasPost({
+      action:'sendAlert',
+      nombre: a.nombre,
+      correo: a.correo,
+      faltas,
+      modulo: `${t==='M'?'Mañana':'Tarde'} Módulo ${m}`,
+      umbral: thr
+    });
+    showToast(`📧 Alerta enviada a ${a.correo}`);
+  }
 }
 
 function marcarTodos(key,val){
@@ -1097,13 +1331,22 @@ function localSave(){
   try{
     localStorage.setItem('asist_state', JSON.stringify(state));
     localStorage.setItem('asist_pers',  JSON.stringify(personalizados));
-  }catch(e){}
+  }catch(e){ console.warn('localStorage lleno',e); }
 }
+
 function localLoad(){
   try{
     const s=localStorage.getItem('asist_state');
     const p=localStorage.getItem('asist_pers');
-    if(s) Object.assign(state, JSON.parse(s));
+    if(s){
+      const parsed=JSON.parse(s);
+      // Preserve motivos when loading from Sheets (merge)
+      Object.keys(parsed).forEach(k=>{
+        if(!state[k]) state[k]={ alumnos:[], asistencias:{}, fechas:[], motivos:{} };
+        // Only load motivos from local (Sheets doesn't store them)
+        if(parsed[k].motivos) state[k].motivos=parsed[k].motivos;
+      });
+    }
     if(p) personalizados=JSON.parse(p);
     return !!(s||p);
   }catch(e){ return false; }
