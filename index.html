@@ -1122,17 +1122,30 @@ function retirarAlumno(key,id){
   showModal(
     '📤 Retirar alumno',
     `¿Confirmas retirar a "${alumno.nombre}"? Se moverá a la sección de retirados y se marcará en Google Sheets.`,
-    ()=>{
+    async ()=>{
       // Mover de activos a retirados en el estado local
       d.alumnos=d.alumnos.filter(a=>a.id!==id);
       if(!d.retirados) d.retirados=[];
       d.retirados.push({...alumno, retirado:true});
       closeModal();
       renderModule(key);
-      scheduleSync();
-      // Sincronizar con Sheets en background
+      scheduleSync(); // guarda estado retirado en localStorage
+
+      // Sincronizar con Sheets
       if(GAS_URL && alumno.fila){
-        gasPost({ action:'retirarAlumno', key, fila:alumno.fila });
+        setSyncStatus('saving');
+        try{
+          // Usar fetch normal (no no-cors) para confirmar que se escribió
+          const res = await fetch(GAS_URL, {
+            method:'POST',
+            mode:'no-cors',
+            headers:{'Content-Type':'text/plain'},
+            body: JSON.stringify({ action:'retirarAlumno', key, fila:alumno.fila })
+          });
+          setSyncStatus('cloudsaved');
+        }catch(e){
+          setSyncStatus('error','Error al retirar en Sheets');
+        }
       }
       showToast(`📤 "${alumno.nombre}" marcado como retirado`);
     }
@@ -1197,15 +1210,34 @@ function marcarTodos(key,val){
 
 function eliminarAlumno(key,id){
   const alumno=state[key].alumnos.find(a=>a.id===id);
-  showModal('Eliminar alumno','¿Seguro que deseas eliminar este alumno y todos sus registros?',()=>{
+  const esM1 = key.split('-')[1]==='1';
+  const msg = esM1
+    ? `¿Seguro que deseas eliminar a "${alumno?.nombre}"? Se eliminará también de los demás módulos del mismo turno.`
+    : `¿Seguro que deseas eliminar a "${alumno?.nombre}" de este módulo?`;
+
+  showModal('Eliminar alumno', msg, ()=>{
     const d=state[key];
     d.alumnos=d.alumnos.filter(a=>a.id!==id);
     delete d.asistencias[id];
+
+    // Si es M1, también eliminar del estado local de los otros módulos del turno
+    if(esM1 && alumno){
+      const turno=key.split('-')[0];
+      [2,3,4].forEach(m=>{
+        const otroKey=`${turno}-${m}`;
+        if(state[otroKey]){
+          state[otroKey].alumnos=state[otroKey].alumnos.filter(
+            a=>a.nombre.trim().toLowerCase()!==alumno.nombre.trim().toLowerCase()
+          );
+        }
+      });
+    }
+
     closeModal();
     renderModule(key);
-    showToast('Alumno eliminado');
+    showToast(esM1?'✅ Alumno eliminado de todos los módulos':'✅ Alumno eliminado');
     scheduleSync();
-    if(alumno?.fila) syncDeleteAlumno(key, alumno.fila);
+    if(alumno?.fila) syncDeleteAlumno(key, alumno.fila, alumno.nombre);
   });
 }
 
@@ -1603,9 +1635,9 @@ function syncAddAlumno(key, alumno){
   }});
 }
 
-function syncDeleteAlumno(key, fila){
+function syncDeleteAlumno(key, fila, nombre){
   if(!fila) return;
-  gasPost({ action:'deleteAlumno', key, fila });
+  gasPost({ action:'deleteAlumno', key, fila, nombre: nombre||'' });
 }
 
 function syncPersonalizados(){ localSave(); }
@@ -1634,7 +1666,7 @@ async function cloudLoad(){
   showToast('🔄 Cargando desde Google Sheets...');
   const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
   let loaded=0;
-  // Preservar motivos guardados localmente
+  // Preservar estado local (motivos Y retirados pendientes de sync)
   const localRaw=localStorage.getItem('asist_state');
   const localState=localRaw?JSON.parse(localRaw):{};
 
@@ -1643,11 +1675,30 @@ async function cloudLoad(){
       const r=await gasGet({ action:'load', key });
       if(r.ok){
         const alumnos=(r.alumnos||[]).map(a=>({...a,id:Number(a.id)}));
-        const retirados=(r.retirados||[]).map(a=>({...a,id:Number(a.id)}));
+        const retiradosSheets=(r.retirados||[]).map(a=>({...a,id:Number(a.id)}));
         const asistencias={};
         Object.keys(r.asistencias||{}).forEach(k=>{ asistencias[Number(k)]=r.asistencias[k]; });
         const motivos=(localState[key]&&localState[key].motivos)||{};
-        state[key]={ alumnos, retirados, asistencias, fechas:r.fechas||[], motivos };
+
+        // Merge retirados: combinar los de Sheets con los marcados localmente
+        // Un alumno retirado localmente pero que Sheets aún no procesó
+        const localRetirados=(localState[key]&&localState[key].retirados)||[];
+        const localRetiradosNorm=localRetirados.map(a=>String(a.nombre||'').trim().toLowerCase());
+
+        // Quitar de activos a los que ya están marcados como retirados localmente
+        const alumnosFiltrados=alumnos.filter(a=>
+          !localRetiradosNorm.includes(String(a.nombre||'').trim().toLowerCase())
+        );
+
+        // Unir retirados de Sheets + retirados locales (sin duplicar)
+        const retiradosMerge=[...retiradosSheets];
+        localRetirados.forEach(lr=>{
+          const norm=String(lr.nombre||'').trim().toLowerCase();
+          const yaEsta=retiradosMerge.some(r=>String(r.nombre||'').trim().toLowerCase()===norm);
+          if(!yaEsta) retiradosMerge.push(lr);
+        });
+
+        state[key]={ alumnos:alumnosFiltrados, retirados:retiradosMerge, asistencias, fechas:r.fechas||[], motivos };
         loaded++;
       }
     }catch(e){ console.warn('loadModule',key,e.message); }
