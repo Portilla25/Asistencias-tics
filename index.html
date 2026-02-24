@@ -277,7 +277,75 @@ tr:hover td{background:rgba(245,158,11,.03);}
   transform:translateY(60px);opacity:0;transition:all .28s;pointer-events:none;
   max-width:320px;line-height:1.4;
 }
-/* ── PROFILE MODAL ───────────────────────────────────── */
+/* ── DATE SELECTOR BAR ───────────────────────────────── */
+.date-selector-bar{
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  background:var(--s2);border:1px solid var(--border2);
+  border-radius:12px;padding:12px 18px;margin-bottom:14px;
+}
+.date-selector-label{
+  font-size:.8rem;font-weight:700;color:var(--text);
+  white-space:nowrap;
+}
+.date-selector-controls{display:flex;align-items:center;gap:8px;}
+.date-quick-btn{
+  padding:6px 14px;border-radius:7px;font-size:.78rem;font-weight:600;
+  border:1px solid var(--border2);background:var(--s3);color:var(--muted);
+  cursor:pointer;transition:all .15s;
+}
+.date-quick-btn:hover{border-color:var(--amber);color:var(--amber);}
+.date-quick-btn.active{
+  background:var(--amber);color:#000;border-color:var(--amber);
+}
+.date-inp-main{
+  background:var(--s3);border:1px solid var(--border2);color:var(--text);
+  border-radius:7px;padding:6px 10px;font-size:.82rem;
+  font-family:'Plus Jakarta Sans',sans-serif;cursor:pointer;
+}
+.date-inp-main:focus{outline:none;border-color:var(--amber);}
+.date-selector-info{
+  font-size:.75rem;padding:4px 10px;border-radius:20px;font-weight:600;
+}
+.date-selector-info.pasado{
+  background:rgba(139,92,246,.15);color:var(--violet);border:1px solid rgba(139,92,246,.3);
+}
+.date-selector-info.hoy{
+  background:rgba(34,197,94,.1);color:var(--green);border:1px solid rgba(34,197,94,.25);
+}
+
+/* ── RETIRADOS SECTION ───────────────────────────────── */
+.retirados-section{
+  margin-top:20px;
+  border:1px solid rgba(239,68,68,.25);
+  border-radius:12px;overflow:hidden;
+}
+.retirados-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 16px;background:rgba(239,68,68,.07);cursor:pointer;
+  font-size:.8rem;font-weight:700;color:var(--red);
+  user-select:none;
+}
+.retirados-header:hover{background:rgba(239,68,68,.12);}
+.retirados-body{ display:none; }
+.retirados-body.open{ display:block; }
+.retirado-row{
+  display:flex;align-items:center;gap:12px;
+  padding:10px 16px;border-top:1px solid rgba(239,68,68,.15);
+  font-size:.82rem;
+}
+.retirado-row:hover{background:rgba(239,68,68,.05);}
+.retirado-nombre{flex:1;color:var(--muted);text-decoration:line-through;}
+.retirado-badge{
+  font-size:.65rem;padding:2px 8px;border-radius:20px;
+  background:rgba(239,68,68,.15);color:var(--red);font-weight:700;
+}
+/* btn retirar in table */
+.btn-retirar{
+  padding:3px 8px;font-size:.68rem;border-radius:5px;
+  background:rgba(239,68,68,.12);color:var(--red);border:1px solid rgba(239,68,68,.3);
+  cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.btn-retirar:hover{background:rgba(239,68,68,.25);}
 .profile-modal{max-width:560px;}
 .profile-header{display:flex;gap:16px;align-items:center;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border);}
 .profile-avatar{
@@ -508,7 +576,7 @@ const MOD_NAMES = ['','Módulo 1','Módulo 2','Módulo 3','Módulo 4'];
 
 // Init all module states empty
 ['M','T'].forEach(t=>[1,2,3,4].forEach(m=>{
-  state[`${t}-${m}`] = { alumnos:[], asistencias:{}, fechas:[], motivos:{} };
+  state[`${t}-${m}`] = { alumnos:[], retirados:[], asistencias:{}, fechas:[], motivos:{} };
 }));
 
 // ── Init UI ────────────────────────────────────────────────────────
@@ -560,7 +628,7 @@ function goPage(id){
 
   if(id==='dashboard') renderDashboard();
   else if(id==='personalizados') renderPersonalizados();
-  else renderModule(id);
+  else { renderModule(id); setTimeout(()=>initDateBar(id), 50); }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -598,13 +666,23 @@ function buildModulePage(key){
 
   <div class="alert-bar" id="alertBar-${key}">⚠️ <span id="alertTxt-${key}"></span></div>
 
+  <!-- SELECTOR DE FECHA — destacado -->
+  <div class="date-selector-bar" id="datebar-${key}">
+    <div class="date-selector-label">📅 Registrando asistencia del día:</div>
+    <div class="date-selector-controls">
+      <button class="date-quick-btn" id="btnHoy-${key}" onclick="setDateQuick('${key}','hoy')">Hoy</button>
+      <button class="date-quick-btn" id="btnAyer-${key}" onclick="setDateQuick('${key}','ayer')">Ayer</button>
+      <input type="date" class="date-inp-main" id="date-${key}" value="${today}" onchange="onDateChange('${key}')">
+    </div>
+    <div class="date-selector-info" id="dateInfo-${key}"></div>
+  </div>
+
   <div class="toolbar">
     <div class="toolbar-h" id="modTitle-${key}">— alumnos</div>
     <div class="search-w">
       <span class="search-ico">🔍</span>
       <input class="inp" id="search-${key}" placeholder="Buscar..." oninput="renderModule('${key}')" style="padding-left:28px;width:165px;">
     </div>
-    <input type="date" class="inp" id="date-${key}" value="${today}" onchange="renderModule('${key}')">
     <div class="thr-wrap">⚠️ Alerta
       <select class="inp" id="thr-${key}" onchange="renderModule('${key}')">
         <option value="2">2 faltas</option>
@@ -620,7 +698,7 @@ function buildModulePage(key){
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>#</th><th>Alumno</th><th>Asistencia hoy</th>
+        <th>#</th><th>Alumno</th><th id="th-asist-${key}">Asistencia hoy</th>
         <th>Historial</th><th>% Asistencia</th><th></th>
       </tr></thead>
       <tbody id="tbody-${key}"></tbody>
@@ -630,7 +708,9 @@ function buildModulePage(key){
   <div class="chart-wrap" style="margin-top:16px">
     <div class="chart-title">📊 Asistencia por fecha — últimas 10 clases</div>
     <div id="chart-${key}"><div style="color:var(--muted);font-size:.78rem;text-align:center;padding:16px">Sin datos aún</div></div>
-  </div>`;
+  </div>
+  <!-- Retirados -->
+  <div id="retirados-section-${key}" style="display:none;margin-top:4px"></div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -766,7 +846,10 @@ function renderModule(key){
         </div>
       </td>
       <td>
-        <button class="btn btn-red" style="padding:3px 8px;font-size:.7rem" onclick="eliminarAlumno('${key}',${a.id})">✕</button>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-red" style="padding:3px 8px;font-size:.7rem" onclick="eliminarAlumno('${key}',${a.id})">✕</button>
+          <button class="btn-retirar" onclick="retirarAlumno('${key}',${a.id})">📤 Retirar</button>
+        </div>
       </td>`;
     tbody.appendChild(tr);
   });
@@ -785,6 +868,64 @@ function renderModule(key){
   } else ab.classList.remove('show');
 
   renderChart(key);
+  renderRetirados(key);
+}
+
+// ── Selector de fecha rápido ──────────────────────────────────────
+function setDateQuick(key, tipo){
+  const inp = document.getElementById(`date-${key}`); if(!inp) return;
+  if(tipo==='hoy'){
+    inp.value = today;
+  } else if(tipo==='ayer'){
+    const ayer = new Date(); ayer.setDate(ayer.getDate()-1);
+    inp.value = ayer.toISOString().split('T')[0];
+  }
+  onDateChange(key);
+}
+
+function onDateChange(key){
+  renderModule(key);
+  updateDateBar(key);
+}
+
+function updateDateBar(key){
+  const inp  = document.getElementById(`date-${key}`); if(!inp) return;
+  const fecha = inp.value;
+  const info  = document.getElementById(`dateInfo-${key}`);
+  const btnH  = document.getElementById(`btnHoy-${key}`);
+  const btnA  = document.getElementById(`btnAyer-${key}`);
+  const thAsist = document.getElementById(`th-asist-${key}`);
+  const ayer  = new Date(); ayer.setDate(ayer.getDate()-1);
+  const ayerStr = ayer.toISOString().split('T')[0];
+
+  // Actualizar botones activos
+  if(btnH) btnH.classList.toggle('active', fecha===today);
+  if(btnA) btnA.classList.toggle('active', fecha===ayerStr);
+
+  // Actualizar info badge y cabecera de tabla
+  if(info){
+    if(fecha===today){
+      info.textContent='📅 Hoy';
+      info.className='date-selector-info hoy';
+    } else {
+      const [y,m,d]=fecha.split('-');
+      const label=`${d}/${m}/${y}`;
+      info.textContent=`📆 Fecha pasada: ${label}`;
+      info.className='date-selector-info pasado';
+    }
+  }
+  if(thAsist){
+    if(fecha===today) thAsist.textContent='Asistencia hoy';
+    else {
+      const [y,m,d]=fecha.split('-');
+      thAsist.textContent=`Asistencia ${d}/${m}/${y}`;
+    }
+  }
+}
+
+// Inicializar date bars al cargar páginas
+function initDateBar(key){
+  updateDateBar(key);
 }
 
 function setAsist(key,id,fecha,val){
@@ -944,7 +1085,59 @@ function showPerfil(key,id){
   },10);
 }
 
-// ── Gráfica de asistencia por módulo ─────────────────────────────
+// ── Renderizar sección de retirados ───────────────────────────────
+function renderRetirados(key){
+  const el=document.getElementById(`retirados-section-${key}`); if(!el) return;
+  const d=state[key];
+  const lista=(d.retirados||[]);
+  if(lista.length===0){ el.style.display='none'; return; }
+  el.style.display='block';
+  const bodyId=`ret-body-${key}`;
+  el.innerHTML=`
+  <div class="retirados-section">
+    <div class="retirados-header" onclick="document.getElementById('${bodyId}').classList.toggle('open');this.querySelector('.ret-arrow').textContent=document.getElementById('${bodyId}').classList.contains('open')?'▲':'▼'">
+      <span>📤 Alumnos retirados (${lista.length})</span>
+      <span class="ret-arrow">▼</span>
+    </div>
+    <div class="retirados-body" id="${bodyId}">
+      ${lista.map(a=>{
+        const reg=d.asistencias[a.id]||{};
+        const P=Object.values(reg).filter(v=>v==='Presente').length;
+        const tot=d.fechas.length;
+        const pct=tot>0?Math.round((P/tot)*100):0;
+        return`<div class="retirado-row">
+          <span class="retirado-nombre">${a.nombre}</span>
+          <span style="font-size:.75rem;color:var(--muted)">${pct}% asist.</span>
+          <span class="retirado-badge">RETIRADO</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ── Retirar alumno ────────────────────────────────────────────────
+function retirarAlumno(key,id){
+  const d=state[key];
+  const alumno=d.alumnos.find(a=>a.id===id); if(!alumno) return;
+  showModal(
+    '📤 Retirar alumno',
+    `¿Confirmas retirar a "${alumno.nombre}"? Se moverá a la sección de retirados y se marcará en Google Sheets.`,
+    ()=>{
+      // Mover de activos a retirados en el estado local
+      d.alumnos=d.alumnos.filter(a=>a.id!==id);
+      if(!d.retirados) d.retirados=[];
+      d.retirados.push({...alumno, retirado:true});
+      closeModal();
+      renderModule(key);
+      scheduleSync();
+      // Sincronizar con Sheets en background
+      if(GAS_URL && alumno.fila){
+        gasPost({ action:'retirarAlumno', key, fila:alumno.fila });
+      }
+      showToast(`📤 "${alumno.nombre}" marcado como retirado`);
+    }
+  );
+}
 function renderChart(key){
   const el=document.getElementById(`chart-${key}`); if(!el) return;
   const d=state[key];
@@ -1438,32 +1631,33 @@ async function cloudLoad(){
     return;
   }
   setSyncStatus('loading');
-  showToast('🔄 Cargando alumnos desde Google Sheets...');
+  showToast('🔄 Cargando desde Google Sheets...');
   const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
-  let ok=0;
+  let loaded=0;
+  // Preservar motivos guardados localmente
+  const localRaw=localStorage.getItem('asist_state');
+  const localState=localRaw?JSON.parse(localRaw):{};
+
   for(const key of keys){
     try{
       const r=await gasGet({ action:'load', key });
       if(r.ok){
-        // Reconstruir IDs como números para consistencia
-        const alumnos=(r.alumnos||[]).map(a=>({...a, id:Number(a.id)}));
+        const alumnos=(r.alumnos||[]).map(a=>({...a,id:Number(a.id)}));
+        const retirados=(r.retirados||[]).map(a=>({...a,id:Number(a.id)}));
         const asistencias={};
         Object.keys(r.asistencias||{}).forEach(k=>{ asistencias[Number(k)]=r.asistencias[k]; });
-        state[key]={ alumnos, asistencias, fechas:r.fechas||[] };
-        ok++;
+        const motivos=(localState[key]&&localState[key].motivos)||{};
+        state[key]={ alumnos, retirados, asistencias, fechas:r.fechas||[], motivos };
+        loaded++;
       }
     }catch(e){ console.warn('loadModule',key,e.message); }
   }
-  // Personalizados siempre del local
-  try{
-    const p=localStorage.getItem('asist_pers');
-    if(p) personalizados=JSON.parse(p);
-  }catch(e){}
+  try{ const p=localStorage.getItem('asist_pers'); if(p) personalizados=JSON.parse(p); }catch(e){}
   localSave();
   refreshCurrentPage();
-  if(ok>0){
+  if(loaded>0){
     setSyncStatus('cloudsaved');
-    showToast(`🟢 ${ok} módulo(s) cargados desde Google Sheets`);
+    showToast(`🟢 ${loaded} módulo(s) cargados desde Google Sheets`);
   } else {
     setSyncStatus('error','No se pudo cargar');
     showToast('⚠️ No se pudo conectar con Sheets. Verifica tu URL.');
