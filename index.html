@@ -944,61 +944,85 @@ function setAsist(key,id,fecha,val){
   checkAndSendAlert(key, id);
 }
 
-// ── Falta/Permiso con motivo y foto ───────────────────────────────
+// ── Falta/Permiso con motivo (crear o editar) ─────────────────────
 function setAsistConMotivo(key,id,fecha,val){
   const d=state[key];
   if(!d.asistencias[id]) d.asistencias[id]={};
-  // Si ya está marcado con este valor → toggle off
-  if(d.asistencias[id][fecha]===val){
+  if(!d.motivos) d.motivos={};
+  if(!d.motivos[id]) d.motivos[id]={};
+
+  const actual = d.asistencias[id][fecha];
+  const existing = d.motivos[id][fecha]||{};
+
+  // Si ya tiene este valor → abrir modal para EDITAR motivo (no toggle)
+  // Si tiene otro valor o vacío → cambiar valor y pedir motivo
+  // Solo toggle off si se hace clic en el mismo botón sin motivo
+  const esMismovalor = actual===val;
+  const tieneMotivo  = !!(existing.texto);
+
+  // Si mismo valor y tiene motivo → abrir a editar
+  // Si mismo valor y sin motivo → quitar (toggle off)
+  if(esMismovalor && !tieneMotivo){
     delete d.asistencias[id][fecha];
-    if(!d.motivos) d.motivos={};
-    if(d.motivos[id]) delete d.motivos[id][fecha];
-    renderModule(key); scheduleSync(); syncAsist(key,id,fecha,''); return;
+    delete d.motivos[id][fecha];
+    renderModule(key); scheduleSync(); syncAsist(key,id,fecha,'',''); return;
   }
-  // Mostrar modal de motivo
-  const alumno=d.alumnos.find(a=>a.id===id);
-  const existing=(d.motivos&&d.motivos[id]&&d.motivos[id][fecha])||{};
-  const icon=val==='Falta'?'❌':'🔵';
+
+  const alumno = d.alumnos.find(a=>a.id===id);
+  const icon   = val==='Falta'?'❌':'🔵';
+  const esEdicion = esMismovalor && tieneMotivo;
+
   const html=`
   <div class="motivo-grid">
     <div>
-      <div class="flabel">Motivo de la ${val.toLowerCase()}</div>
-      <textarea class="finp" id="motivoTxt" rows="3" placeholder="Describe el motivo..." style="resize:vertical">${existing.texto||''}</textarea>
+      <div class="flabel">Motivo de la ${val==='Falta'?'falta':'permiso'} <span style="color:var(--muted);font-size:.72rem">(aparecerá en Google Sheets)</span></div>
+      <textarea class="finp" id="motivoTxt" rows="3" placeholder="Ej: cita médica, viaje, llegó tarde..." style="resize:vertical">${existing.texto||''}</textarea>
     </div>
     <div>
-      <div class="flabel" style="margin-bottom:6px">Foto de evidencia (opcional)</div>
+      <div class="flabel" style="margin-bottom:6px">Foto de evidencia <span style="color:var(--muted);font-size:.72rem">(opcional)</span></div>
       <div class="foto-preview" id="fotoPreview" onclick="document.getElementById('fotoInput').click()">
         ${existing.foto?`<img src="${existing.foto}" alt="evidencia">`:'📷 Clic para subir foto'}
       </div>
       <input type="file" id="fotoInput" accept="image/*" style="display:none" onchange="previewFoto(this)">
       ${existing.foto?`<button class="btn btn-red" style="font-size:.7rem;margin-top:6px;padding:3px 8px" onclick="clearFoto()">✕ Quitar foto</button>`:''}
     </div>
+    ${esEdicion?`<div style="font-size:.72rem;color:var(--muted);padding:4px 0">💡 Editando motivo existente — deja el campo vacío para borrarlo</div>`:''}
   </div>`;
 
-  showModal(`${icon} ${val} — ${alumno?.nombre||''}`, '', ()=>{
-    const texto=document.getElementById('motivoTxt')?.value.trim()||'';
-    const fotoEl=document.getElementById('fotoPreview')?.querySelector('img');
-    const foto=fotoEl?fotoEl.src:(existing.foto||'');
-    // Guardar asistencia
-    d.asistencias[id][fecha]=val;
-    if(!d.fechas.includes(fecha)){d.fechas.push(fecha);d.fechas.sort();}
-    // Guardar motivo
-    if(!d.motivos) d.motivos={};
-    if(!d.motivos[id]) d.motivos[id]={};
-    d.motivos[id][fecha]={ texto, foto, tipo:val };
-    closeModal();
-    renderModule(key);
-    scheduleSync();
-    syncAsist(key,id,fecha,val);
-    checkAndSendAlert(key,id);
-    showToast(`${icon} ${val} registrada${texto?' con motivo':''}`);
-  }, html);
-  document.getElementById('mOk').textContent=`Guardar ${val}`;
-  // Resize modal for this content
+  showModal(
+    `${icon} ${esEdicion?'Editar motivo':'Registrar '+val} — ${alumno?.nombre?.split(' ').slice(0,2).join(' ')||''}`,
+    '', ()=>{
+      const texto = document.getElementById('motivoTxt')?.value.trim()||'';
+      const fotoEl = document.getElementById('fotoPreview')?.querySelector('img');
+      const foto   = fotoEl ? fotoEl.src : (existing.foto||'');
+
+      // Guardar asistencia
+      d.asistencias[id][fecha] = val;
+      if(!d.fechas.includes(fecha)){d.fechas.push(fecha);d.fechas.sort();}
+
+      // Guardar o borrar motivo
+      if(texto||foto){
+        d.motivos[id][fecha] = { texto, foto, tipo:val };
+      } else {
+        delete d.motivos[id][fecha];
+      }
+
+      closeModal();
+      renderModule(key);
+      scheduleSync();
+      syncAsist(key, id, fecha, val, texto);
+      checkAndSendAlert(key, id);
+      showToast(`${icon} ${val}${texto?' — "'+texto.substring(0,30)+(texto.length>30?'...':'')+'"':' registrada'}`);
+    }, html
+  );
+
+  document.getElementById('mOk').textContent = esEdicion ? '💾 Guardar cambios' : `Registrar ${val}`;
   setTimeout(()=>{
     const m=document.querySelector('.modal');
     if(m) m.style.maxWidth='520px';
-  },10);
+    // Enfocar el textarea
+    document.getElementById('motivoTxt')?.focus();
+  },50);
 }
 
 window._fotoBase64='';
@@ -1617,10 +1641,10 @@ async function gasGet(params){
 }
 
 // ── Sync actions ──────────────────────────────────────────────────
-function syncAsist(key, alumnoId, fecha, valor){
+function syncAsist(key, alumnoId, fecha, valor, motivo=''){
   const alumno=state[key]?.alumnos.find(a=>a.id===alumnoId);
   if(!alumno?.fila) return;
-  gasPost({ action:'setAsist', key, fila:alumno.fila, fecha, valor });
+  gasPost({ action:'setAsist', key, fila:alumno.fila, fecha, valor, motivo });
 }
 
 function syncAddAlumno(key, alumno){
