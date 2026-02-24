@@ -1666,7 +1666,8 @@ async function cloudLoad(){
   showToast('🔄 Cargando desde Google Sheets...');
   const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
   let loaded=0;
-  // Preservar estado local (motivos Y retirados pendientes de sync)
+
+  // Solo preservar motivos del localStorage (lo único que no está en Sheets)
   const localRaw=localStorage.getItem('asist_state');
   const localState=localRaw?JSON.parse(localRaw):{};
 
@@ -1674,35 +1675,50 @@ async function cloudLoad(){
     try{
       const r=await gasGet({ action:'load', key });
       if(r.ok){
-        const alumnos=(r.alumnos||[]).map(a=>({...a,id:Number(a.id)}));
-        const retiradosSheets=(r.retirados||[]).map(a=>({...a,id:Number(a.id)}));
+        // Convertir todos los IDs a Number para consistencia
+        const alumnos=(r.alumnos||[]).map(a=>({...a, id:Number(a.id)}));
+        const retirados=(r.retirados||[]).map(a=>({...a, id:Number(a.id)}));
+
+        // Asistencias: usar SIEMPRE los de Sheets (fuente de verdad)
         const asistencias={};
-        Object.keys(r.asistencias||{}).forEach(k=>{ asistencias[Number(k)]=r.asistencias[k]; });
-        const motivos=(localState[key]&&localState[key].motivos)||{};
-
-        // Merge retirados: combinar los de Sheets con los marcados localmente
-        // Un alumno retirado localmente pero que Sheets aún no procesó
-        const localRetirados=(localState[key]&&localState[key].retirados)||[];
-        const localRetiradosNorm=localRetirados.map(a=>String(a.nombre||'').trim().toLowerCase());
-
-        // Quitar de activos a los que ya están marcados como retirados localmente
-        const alumnosFiltrados=alumnos.filter(a=>
-          !localRetiradosNorm.includes(String(a.nombre||'').trim().toLowerCase())
-        );
-
-        // Unir retirados de Sheets + retirados locales (sin duplicar)
-        const retiradosMerge=[...retiradosSheets];
-        localRetirados.forEach(lr=>{
-          const norm=String(lr.nombre||'').trim().toLowerCase();
-          const yaEsta=retiradosMerge.some(r=>String(r.nombre||'').trim().toLowerCase()===norm);
-          if(!yaEsta) retiradosMerge.push(lr);
+        Object.entries(r.asistencias||{}).forEach(([k,v])=>{
+          asistencias[Number(k)]=v;
         });
 
-        state[key]={ alumnos:alumnosFiltrados, retirados:retiradosMerge, asistencias, fechas:r.fechas||[], motivos };
+        // Retirados locales pendientes de sync (marcados en web pero Sheets aún no procesó)
+        const localRetirados=(localState[key]&&localState[key].retirados)||[];
+        const retiradosMerge=[...retirados];
+        localRetirados.forEach(lr=>{
+          const norm=String(lr.nombre||'').trim().toLowerCase();
+          const enSheets=retiradosMerge.some(r=>
+            String(r.nombre||'').trim().toLowerCase()===norm
+          );
+          if(!enSheets) retiradosMerge.push({...lr});
+        });
+
+        // Filtrar activos: quitar los que están en retiradosMerge
+        const retiradosNorm=retiradosMerge.map(r=>
+          String(r.nombre||'').trim().toLowerCase()
+        );
+        const alumnosFiltrados=alumnos.filter(a=>
+          !retiradosNorm.includes(String(a.nombre||'').trim().toLowerCase())
+        );
+
+        // Motivos solo del localStorage
+        const motivos=(localState[key]&&localState[key].motivos)||{};
+
+        state[key]={
+          alumnos:    alumnosFiltrados,
+          retirados:  retiradosMerge,
+          asistencias: asistencias,
+          fechas:     r.fechas||[],
+          motivos:    motivos
+        };
         loaded++;
       }
-    }catch(e){ console.warn('loadModule',key,e.message); }
+    }catch(e){ console.warn('cloudLoad error',key,e.message); }
   }
+
   try{ const p=localStorage.getItem('asist_pers'); if(p) personalizados=JSON.parse(p); }catch(e){}
   localSave();
   refreshCurrentPage();
