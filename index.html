@@ -396,11 +396,13 @@ tr:hover td{background:rgba(245,158,11,.03);}
 .overlay.show{display:flex;}
 .modal{
   background:var(--s1);border:1px solid var(--border2);border-radius:16px;
-  padding:28px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto;
+  padding:0;width:100%;max-width:460px;max-height:90vh;
+  display:flex;flex-direction:column;overflow:hidden;
 }
-.modal h3{font-size:1rem;font-weight:700;margin-bottom:6px;}
-.modal p{color:var(--muted);font-size:.83rem;margin-bottom:18px;line-height:1.5;}
-.modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:18px;}
+.modal h3{font-size:1rem;font-weight:700;margin-bottom:6px;padding:28px 28px 0;}
+.modal p{color:var(--muted);font-size:.83rem;margin-bottom:18px;line-height:1.5;padding:0 28px;}
+.modal-body-scroll{flex:1;overflow-y:auto;padding:0 28px 8px;}
+.modal-btns{display:flex;gap:8px;justify-content:flex-end;padding:14px 28px;border-top:1px solid var(--border);background:var(--s1);flex-shrink:0;}
 
 /* ── DASHBOARD ───────────────────────────────────────── */
 .dash-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:20px;}
@@ -544,8 +546,10 @@ tr:hover td{background:rgba(245,158,11,.03);}
 <div class="overlay" id="overlay">
   <div class="modal" id="modalBox">
     <h3 id="mTitle"></h3>
-    <p id="mBody"></p>
-    <div id="mExtra"></div>
+    <div class="modal-body-scroll">
+      <p id="mBody"></p>
+      <div id="mExtra"></div>
+    </div>
     <div class="modal-btns">
       <button class="btn btn-outline" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-amber" id="mOk">Confirmar</button>
