@@ -469,6 +469,39 @@ tr:hover td{background:rgba(245,158,11,.025);}
 }
 .hamburger:hover{border-color:var(--amber);color:var(--amber);}
 
+
+/* ── NOTAS ──────────────────────────────────────────────────────── */
+.notas-tema{
+  background:var(--s1);border:1px solid var(--border);border-radius:var(--radius);
+  margin-bottom:12px;overflow:hidden;box-shadow:var(--shadow-sm);
+}
+.notas-tema-header{
+  display:flex;align-items:center;gap:10px;padding:12px 16px;
+  background:var(--s2);border-bottom:1px solid var(--border);cursor:pointer;
+  user-select:none;transition:background .15s;
+}
+.notas-tema-header:hover{background:var(--s3);}
+.notas-tema-title{font-size:.85rem;font-weight:700;flex:1;}
+.notas-tema-stats{display:flex;gap:12px;font-size:.72rem;color:var(--muted);font-family:'JetBrains Mono',monospace;}
+.notas-tema-badge{
+  font-size:.68rem;font-weight:700;padding:2px 10px;border-radius:20px;
+  background:rgba(124,58,237,.15);color:var(--violet-l);border:1px solid rgba(124,58,237,.25);
+}
+.notas-table-wrap{overflow:hidden;}
+.nota-inp{
+  width:80px;background:var(--s2);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.83rem;
+  padding:5px 8px;outline:none;transition:border-color .2s,box-shadow .2s;text-align:center;
+}
+.nota-inp:focus{border-color:var(--violet-l);box-shadow:0 0 0 3px rgba(124,58,237,.12);}
+.nota-badge{
+  display:inline-block;font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:10px;
+  font-family:'JetBrains Mono',monospace;
+}
+.nota-badge.ap{background:rgba(22,163,74,.15);color:var(--green-l);}
+.nota-badge.des{background:rgba(220,38,38,.15);color:var(--red-l);}
+.nota-badge.vacio{background:var(--s3);color:var(--muted);}
+
 /* ── RESPONSIVE ─────────────────────────────────────────────────── */
 @media(max-width:900px){
   .content{margin-left:0!important;}
@@ -698,23 +731,22 @@ function goPage(id){
 
   document.getElementById(`page-${id}`)?.classList.add('active');
 
-  // Highlight nav
   document.querySelectorAll('.nav-item').forEach(n=>{
     if(n.getAttribute('onclick')===`goPage('${id}')`) n.classList.add('active');
   });
 
   currentPage = id;
 
-  // Update topbar title
   let title = 'Resumen General';
   if(id==='personalizados') title = '👤 Clases Personalizadas';
+  else if(id==='mensual') title = '📅 Resumen Mensual';
+  else if(id==='historial') title = '🕒 Historial de Cambios';
   else if(id.includes('-')){
     const [t,m] = id.split('-');
     title = `${TURNOS[t].label} — Módulo ${m}`;
   }
   document.getElementById('topbarTitle').textContent = title;
 
-  // Close sidebar on mobile after navigation
   if(window.innerWidth<900){
     document.getElementById('sidebar').classList.add('hidden');
     document.getElementById('sidebarOverlay').classList.remove('show');
@@ -722,6 +754,12 @@ function goPage(id){
 
   if(id==='dashboard') renderDashboard();
   else if(id==='personalizados') renderPersonalizados();
+  else if(id==='mensual'){
+    const mi=document.getElementById('mensualMes');
+    if(mi&&!mi.value) mi.value=today.slice(0,7);
+    renderMensual();
+  }
+  else if(id==='historial') renderHistorialMini();
   else { renderModule(id); setTimeout(()=>initDateBar(id), 50); }
 }
 
@@ -804,7 +842,17 @@ function buildModulePage(key){
     <div id="chart-${key}"><div style="color:var(--muted);font-size:.78rem;text-align:center;padding:16px">Sin datos aún</div></div>
   </div>
   <!-- Retirados -->
-  <div id="retirados-section-${key}" style="display:none;margin-top:4px"></div>`;
+  <div id="retirados-section-${key}" style="display:none;margin-top:4px"></div>
+
+  <!-- NOTAS -->
+  <div style="margin-top:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <div style="font-size:.85rem;font-weight:700;">📝 Notas</div>
+      <button class="btn btn-violet" onclick="showAddNotaModal('${key}')">＋ Nuevo tema</button>
+    </div>
+    <div id="notas-section-${key}"></div>
+  </div>`;
+
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -963,6 +1011,7 @@ function renderModule(key){
 
   renderChart(key);
   renderRetirados(key);
+  renderNotas(key);
 }
 
 // ── Selector de fecha rápido ──────────────────────────────────────
@@ -1027,12 +1076,10 @@ function setAsist(key,id,fecha,val){
   if(!d.asistencias[id]) d.asistencias[id]={};
   if(d.asistencias[id][fecha]===val){
     delete d.asistencias[id][fecha];
-    // Limpiar motivo si existía
     if(d.motivos?.[id]?.[fecha]) delete d.motivos[id][fecha];
     val='';
   } else {
     d.asistencias[id][fecha]=val;
-    // Limpiar motivo previo al cambiar a Presente
     if(val==='Presente' && d.motivos?.[id]?.[fecha]) delete d.motivos[id][fecha];
     if(!d.fechas.includes(fecha)){d.fechas.push(fecha);d.fechas.sort();}
   }
@@ -1040,6 +1087,14 @@ function setAsist(key,id,fecha,val){
   scheduleSync();
   syncAsist(key, id, fecha, val);
   checkAndSendAlert(key, id);
+  // Historial
+  const alumno=d.alumnos.find(a=>a.id===id)||(d.retirados||[]).find(a=>a.id===id);
+  if(alumno && typeof addHistorial==='function'){
+    const lbl=key.replace('M-','Mañana M').replace('T-','Tarde M');
+    const icons={'Presente':'✅','Falta':'❌','Permiso':'🔵','':'↩️'};
+    const labels={'Presente':'Presente','Falta':'Falta','Permiso':'Permiso','':'eliminada'};
+    addHistorial(icons[val]||'📝',`${alumno.nombre} — ${labels[val]||val}`,`${lbl} · ${fecha}`);
+  }
 }
 
 // ── Falta/Permiso con motivo (crear o editar) ─────────────────────
@@ -1255,14 +1310,12 @@ function retirarAlumno(key,id){
     '📤 Retirar alumno',
     `¿Confirmas retirar a "${alumno.nombre}"? Se retirará en este módulo y en los siguientes del mismo turno.`,
     async ()=>{
-      // Retirar localmente en este módulo
       d.alumnos=d.alumnos.filter(a=>a.id!==id);
       if(!d.retirados) d.retirados=[];
       d.retirados.push({...alumno, retirado:true});
 
-      // Retirar localmente en módulos siguientes del mismo turno (M3, M4, etc.)
       [2,3,4,5,6,7,8,9].forEach(m=>{
-        if(m <= modNumInt) return; // solo los que vienen después
+        if(m <= modNumInt) return;
         const otroKey=`${turno}-${m}`;
         if(!state[otroKey]) return;
         const otro=state[otroKey];
@@ -1280,20 +1333,17 @@ function retirarAlumno(key,id){
       renderModule(key);
       scheduleSync();
 
-      // Sincronizar con Sheets — enviar nombre para cascada en Apps Script
       if(GAS_URL && alumno.fila){
         setSyncStatus('saving');
         try{
-          await fetch(GAS_URL, {
-            method:'POST',
-            mode:'no-cors',
-            headers:{'Content-Type':'text/plain'},
-            body: JSON.stringify({ action:'retirarAlumno', key, fila:alumno.fila, nombre:alumno.nombre })
-          });
+          await fetch(GAS_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
+            body:JSON.stringify({action:'retirarAlumno',key,fila:alumno.fila,nombre:alumno.nombre})});
           setSyncStatus('cloudsaved');
-        }catch(e){
-          setSyncStatus('error','Error al retirar en Sheets');
-        }
+        }catch(e){ setSyncStatus('error','Error al retirar en Sheets'); }
+      }
+      if(typeof addHistorial==='function'){
+        const lbl=key.replace('M-','Mañana M').replace('T-','Tarde M');
+        addHistorial('📤',`${alumno.nombre} retirado`,lbl);
       }
       showToast(`📤 "${alumno.nombre}" retirado en módulo ${modNum} y siguientes`);
     }
@@ -2067,35 +2117,7 @@ function clearHistorial(){
   });
 }
 loadHistorial();
-
-// Patch setAsist to log historial
-const _origSetAsist=setAsist;
-function setAsist(key,id,fecha,val){
-  const d=state[key]; if(!d) return;
-  const alumno=d.alumnos.find(a=>a.id===id)||d.retirados?.find(a=>a.id===id);
-  _origSetAsist(key,id,fecha,val);
-  if(alumno){
-    const keyLabel=key.replace('M-','Mañana M').replace('T-','Tarde M');
-    const icons={'Presente':'✅','Falta':'❌','Permiso':'🔵','':`↩️`};
-    const labels={'Presente':'Presente','Falta':'Falta','Permiso':'Permiso','':'eliminada'};
-    addHistorial(icons[val]||'📝',
-      `${alumno.nombre} — ${labels[val]||val}`,
-      `${keyLabel} · ${fecha}`);
-  }
-}
-
-// Patch retirarAlumno to log
-const _origRetirar=retirarAlumno;
-function retirarAlumno(key,id){
-  const d=state[key]; if(!d) return;
-  const alumno=d.alumnos.find(a=>a.id===id);
-  if(alumno){
-    const keyLabel=key.replace('M-','Mañana M').replace('T-','Tarde M');
-    // Log after original completes
-    setTimeout(()=>addHistorial('📤',`${alumno.nombre} retirado`,keyLabel),200);
-  }
-  _origRetirar(key,id);
-}
+loadNotasFromLocal();
 
 // ════════════════════════════════════════════════════════════════════
 // BÚSQUEDA GLOBAL
@@ -2254,17 +2276,211 @@ function reactivarAlumno(key,id){
   );
 }
 
-// Override goPage to trigger mensual/historial render
-const _origGoPage=goPage;
-function goPage(id){
-  _origGoPage(id);
-  if(id==='mensual'){
-    // Set current month as default
-    const mi=document.getElementById('mensualMes');
-    if(mi&&!mi.value) mi.value=today.slice(0,7);
-    renderMensual();
+// ════════════════════════════════════════════════════════════════════
+// SISTEMA DE NOTAS
+// ════════════════════════════════════════════════════════════════════
+
+// notas se guarda en state[key].notas = { [temaId]: { nombre, fecha, notas: {alumnoId: valor} } }
+
+function getNotas(key){
+  if(!state[key].notas) state[key].notas={};
+  return state[key].notas;
+}
+
+// ── Mostrar modal para crear nuevo tema ───────────────────────────
+function showAddNotaModal(key){
+  const html=`
+    <div style="display:flex;flex-direction:column;gap:12px;padding-top:8px">
+      <div class="fgroup">
+        <div class="flabel">Nombre del tema *</div>
+        <input class="finp" id="notaTema" placeholder="Ej: Práctica 1, Evaluación final..." autofocus>
+      </div>
+      <div class="fgroup">
+        <div class="flabel">Nota mínima aprobatoria</div>
+        <input class="finp" id="notaMin" type="number" value="11" min="0" max="20" style="width:90px">
+      </div>
+    </div>`;
+  showModal('📝 Nuevo tema de evaluación', '', ()=>{
+    const nombre = document.getElementById('notaTema')?.value?.trim();
+    const min    = parseFloat(document.getElementById('notaMin')?.value)||11;
+    if(!nombre){ showToast('⚠️ Escribe el nombre del tema'); return; }
+    const id = 'tema_' + Date.now();
+    const notas = getNotas(key);
+    notas[id] = { nombre, min, fecha: today, notas:{} };
+    closeModal();
+    renderNotas(key);
+    localSave();
+    addHistorial('📝', `Nuevo tema: "${nombre}"`, key.replace('M-','Mañana M').replace('T-','Tarde M'));
+    showToast('✅ Tema creado');
+  }, html);
+  setTimeout(()=>document.getElementById('notaTema')?.focus(), 100);
+}
+
+// ── Renderizar todas las tablas de notas del módulo ───────────────
+function renderNotas(key){
+  const el = document.getElementById(`notas-section-${key}`); if(!el) return;
+  const notas = getNotas(key);
+  const d = state[key];
+  const temas = Object.entries(notas).sort((a,b)=> (b[1].fecha||'').localeCompare(a[1].fecha||''));
+
+  if(temas.length===0){
+    el.innerHTML=`<div style="text-align:center;padding:28px;color:var(--muted);font-size:.83rem;background:var(--s1);border:1px solid var(--border);border-radius:var(--radius);">Sin temas de evaluación aún. Presiona <strong>＋ Nuevo tema</strong> para comenzar.</div>`;
+    return;
   }
-  if(id==='historial') renderHistorialMini();
+
+  el.innerHTML = temas.map(([id, tema])=>{
+    const alumnos = d.alumnos||[];
+    const vals = Object.values(tema.notas||{}).filter(v=>v!==''&&v!==null&&v!==undefined);
+    const ingresadas = vals.length;
+    const prom = ingresadas>0 ? (vals.reduce((a,b)=>a+parseFloat(b),0)/ingresadas).toFixed(1) : '—';
+    const aprobados = vals.filter(v=>parseFloat(v)>=(tema.min||11)).length;
+
+    const filas = alumnos.map(a=>{
+      const val = tema.notas[a.id]!==undefined ? tema.notas[a.id] : '';
+      const num  = val!=='' ? parseFloat(val) : null;
+      const badge = num===null
+        ? '<span class="nota-badge vacio">—</span>'
+        : num>=(tema.min||11)
+          ? '<span class="nota-badge ap">✓ Aprobado</span>'
+          : '<span class="nota-badge des">✗ Desap.</span>';
+      return `<tr>
+        <td><div class="aname">${a.nombre}</div></td>
+        <td>
+          <input class="nota-inp" type="number" min="0" max="20" step="0.5"
+            value="${val}" placeholder="—"
+            onchange="setNota('${key}','${id}',${a.id},this.value)"
+            onblur="setNota('${key}','${id}',${a.id},this.value)">
+        </td>
+        <td>${badge}</td>
+      </tr>`;
+    }).join('');
+
+    return `<div class="notas-tema">
+      <div class="notas-tema-header" onclick="toggleNotasTema('ntbody-${key}-${id}')">
+        <span class="notas-tema-title">📋 ${tema.nombre}</span>
+        <span class="notas-tema-stats">
+          <span>${ingresadas}/${alumnos.length} notas</span>
+          <span>Prom: ${prom}</span>
+          <span>${aprobados} aprobados</span>
+        </span>
+        <span class="notas-tema-badge">Min: ${tema.min||11}</span>
+        <button class="btn btn-red" style="padding:3px 9px;font-size:.7rem;margin-left:8px" onclick="event.stopPropagation();eliminarTema('${key}','${id}')">✕</button>
+      </div>
+      <div class="notas-table-wrap" id="ntbody-${key}-${id}">
+        <table style="width:100%">
+          <thead><tr>
+            <th>Alumno</th><th style="width:110px">Nota (0–20)</th><th style="width:130px">Estado</th>
+          </tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleNotasTema(id){
+  const el=document.getElementById(id); if(!el) return;
+  el.style.display = el.style.display==='none' ? '' : 'none';
+}
+
+// ── Guardar una nota individual ───────────────────────────────────
+function setNota(key, temaId, alumnoId, valor){
+  const notas = getNotas(key);
+  if(!notas[temaId]) return;
+  const num = valor===''||valor===null ? '' : parseFloat(valor);
+  notas[temaId].notas[alumnoId] = isNaN(num) ? '' : num;
+  // Re-render solo stats del header sin rerenderizar toda la tabla
+  renderNotasHeader(key, temaId);
+  localSave();
+  // Sincronizar con Sheets
+  syncNota(key, temaId, alumnoId, notas[temaId].notas[alumnoId]);
+}
+
+function renderNotasHeader(key, temaId){
+  // Actualiza solo el header del tema sin destruir los inputs
+  const notas = getNotas(key);
+  const tema  = notas[temaId]; if(!tema) return;
+  const d     = state[key];
+  const vals  = Object.values(tema.notas||{}).filter(v=>v!==''&&v!==null&&v!==undefined&&!isNaN(v));
+  const prom  = vals.length>0 ? (vals.reduce((a,b)=>a+parseFloat(b),0)/vals.length).toFixed(1) : '—';
+  const aprobados = vals.filter(v=>parseFloat(v)>=(tema.min||11)).length;
+  const statsEl = document.querySelector(`#ntbody-${key}-${temaId}`)?.previousElementSibling?.querySelector('.notas-tema-stats');
+  if(statsEl) statsEl.innerHTML=`
+    <span>${vals.length}/${(d.alumnos||[]).length} notas</span>
+    <span>Prom: ${prom}</span>
+    <span>${aprobados} aprobados</span>`;
+  // Actualizar badges de la columna estado
+  const tbody = document.querySelector(`#ntbody-${key}-${temaId} tbody`);
+  if(!tbody) return;
+  (d.alumnos||[]).forEach((a,idx)=>{
+    const val  = tema.notas[a.id];
+    const num  = val!==undefined&&val!=='' ? parseFloat(val) : null;
+    const td   = tbody.rows[idx]?.cells[2]; if(!td) return;
+    td.innerHTML = num===null
+      ? '<span class="nota-badge vacio">—</span>'
+      : num>=(tema.min||11)
+        ? '<span class="nota-badge ap">✓ Aprobado</span>'
+        : '<span class="nota-badge des">✗ Desap.</span>';
+  });
+}
+
+// ── Eliminar tema ─────────────────────────────────────────────────
+function eliminarTema(key, temaId){
+  const notas = getNotas(key);
+  const nombre = notas[temaId]?.nombre||'este tema';
+  showModal('🗑 Eliminar tema',`¿Confirmas eliminar "${nombre}" y todas sus notas?`,()=>{
+    delete notas[temaId];
+    closeModal();
+    renderNotas(key);
+    localSave();
+    syncEliminarTema(key, temaId);
+    showToast(`🗑 Tema "${nombre}" eliminado`);
+  });
+}
+
+// ── Sync notas con Sheets ─────────────────────────────────────────
+function syncNota(key, temaId, alumnoId, valor){
+  const notas = getNotas(key);
+  const tema  = notas[temaId]; if(!tema) return;
+  const alumno = state[key]?.alumnos.find(a=>a.id===alumnoId); if(!alumno) return;
+  gasPost({
+    action:  'setNota',
+    key,
+    temaId,
+    temaNombre: tema.nombre,
+    alumnoNombre: alumno.nombre,
+    alumnoFila: alumno.fila,
+    valor: valor===''||valor===null ? '' : parseFloat(valor)
+  });
+}
+
+function syncEliminarTema(key, temaId){
+  gasPost({ action:'eliminarTema', key, temaId });
+}
+
+// Cargar notas desde localStorage al iniciar (se guardan junto con state)
+function loadNotasFromLocal(){
+  const KEYS=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
+  try{
+    const raw=localStorage.getItem('asist_notas');
+    if(!raw) return;
+    const saved=JSON.parse(raw);
+    KEYS.forEach(k=>{ if(saved[k]) { if(!state[k]) state[k]={}; state[k].notas=saved[k]; } });
+  }catch(e){}
+}
+
+function saveNotasToLocal(){
+  const KEYS=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
+  const out={};
+  KEYS.forEach(k=>{ if(state[k]?.notas) out[k]=state[k].notas; });
+  try{ localStorage.setItem('asist_notas', JSON.stringify(out)); }catch(e){}
+}
+
+// Patch localSave para incluir notas
+const _origLocalSave = localSave;
+function localSave(){
+  _origLocalSave();
+  saveNotasToLocal();
 }
 </script>
 </body>
