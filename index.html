@@ -1758,7 +1758,13 @@ function localSave(){
   try{
     localStorage.setItem('asist_state', JSON.stringify(state));
     localStorage.setItem('asist_pers',  JSON.stringify(personalizados));
-  }catch(e){ console.warn('localStorage lleno',e); }
+    // Guardar notas separado para acceso rápido
+    const notasOut={};
+    ['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'].forEach(k=>{
+      if(state[k]?.notas) notasOut[k]=state[k].notas;
+    });
+    localStorage.setItem('asist_notas', JSON.stringify(notasOut));
+  }catch(e){ console.warn('localStorage error',e); }
 }
 
 function localLoad(){
@@ -1767,16 +1773,22 @@ function localLoad(){
     const p=localStorage.getItem('asist_pers');
     if(s){
       const parsed=JSON.parse(s);
-      // Preserve motivos when loading from Sheets (merge)
-      Object.keys(parsed).forEach(k=>{
-        if(!state[k]) state[k]={ alumnos:[], asistencias:{}, fechas:[], motivos:{} };
-        // Only load motivos from local (Sheets doesn't store them)
-        if(parsed[k].motivos) state[k].motivos=parsed[k].motivos;
+      const KEYS=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
+      KEYS.forEach(k=>{
+        if(!parsed[k]) return;
+        if(!state[k]) state[k]={ alumnos:[], retirados:[], asistencias:{}, fechas:[], motivos:{}, notas:{} };
+        // Cargar todo desde localStorage
+        if(parsed[k].alumnos)     state[k].alumnos     = parsed[k].alumnos;
+        if(parsed[k].retirados)   state[k].retirados   = parsed[k].retirados;
+        if(parsed[k].asistencias) state[k].asistencias = parsed[k].asistencias;
+        if(parsed[k].fechas)      state[k].fechas      = parsed[k].fechas;
+        if(parsed[k].motivos)     state[k].motivos     = parsed[k].motivos;
+        if(parsed[k].notas)       state[k].notas       = parsed[k].notas;
       });
     }
     if(p) personalizados=JSON.parse(p);
     return !!(s||p);
-  }catch(e){ return false; }
+  }catch(e){ console.warn('localLoad error',e); return false; }
 }
 
 // ── Indicador ─────────────────────────────────────────────────────
@@ -1915,14 +1927,14 @@ async function cloudLoad(){
       retirados:   retiradosMerge,
       asistencias: asistencias,
       fechas:      r.fechas||[],
-      motivos:     localState[key]?.motivos||{},
-      notas:       localState[key]?.notas||{}
+      motivos:     localState[key]?.motivos  || state[key]?.motivos  || {},
+      notas:       localState[key]?.notas    || state[key]?.notas    || {}
     };
     loaded++;
   }
 
   try{ const p=localStorage.getItem('asist_pers'); if(p) personalizados=JSON.parse(p); }catch(e){}
-  try{ loadNotasFromLocal(); }catch(e){}
+  
   try{ localSave(); }catch(e){}
   try{ refreshCurrentPage(); }catch(err){
     console.error('refreshCurrentPage error:', err);
@@ -2172,7 +2184,7 @@ function clearHistorial(){
   });
 }
 loadHistorial();
-loadNotasFromLocal();
+
 
 // ════════════════════════════════════════════════════════════════════
 // BÚSQUEDA GLOBAL
@@ -2513,30 +2525,9 @@ function syncEliminarTema(key, temaId){
   gasPost({ action:'eliminarTema', key, temaId });
 }
 
-// Cargar notas desde localStorage al iniciar (se guardan junto con state)
-function loadNotasFromLocal(){
-  const KEYS=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
-  try{
-    const raw=localStorage.getItem('asist_notas');
-    if(!raw) return;
-    const saved=JSON.parse(raw);
-    KEYS.forEach(k=>{ if(saved[k]) { if(!state[k]) state[k]={}; state[k].notas=saved[k]; } });
-  }catch(e){}
-}
+// notas persistence now integrated in localSave/localLoad
 
-function saveNotasToLocal(){
-  const KEYS=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
-  const out={};
-  KEYS.forEach(k=>{ if(state[k]?.notas) out[k]=state[k].notas; });
-  try{ localStorage.setItem('asist_notas', JSON.stringify(out)); }catch(e){}
-}
 
-// Patch localSave para incluir notas
-const _origLocalSave = localSave;
-function localSave(){
-  _origLocalSave();
-  saveNotasToLocal();
-}
 </script>
 </body>
 </html>
