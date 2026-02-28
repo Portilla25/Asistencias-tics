@@ -1638,7 +1638,11 @@ function renderDashboard(){
   const thr=3;
 
   keys.forEach(key=>{
+    // Garantizar estructura mínima aunque state no esté completo
+    if(!state[key]) state[key]={alumnos:[],retirados:[],asistencias:{},fechas:{},motivos:{},notas:{}};
     const d=state[key];
+    if(!d.alumnos) d.alumnos=[];
+    if(!d.asistencias) d.asistencias={};
     totalAl+=d.alumnos.length;
     d.alumnos.forEach(a=>{
       const reg=d.asistencias[a.id]||{};
@@ -1881,6 +1885,7 @@ async function cloudLoad(){
   );
 
   let loaded=0;
+  console.log('[cloudLoad] results:', results.map(r=>r.status==='fulfilled'?{key:r.value?.key,ok:r.value?.r?.ok,n:(r.value?.r?.alumnos||[]).length}:r.reason?.message));
   for(const res of results){
     if(res.status!=='fulfilled') { console.warn('cloudLoad failed:', res.reason?.message); continue; }
     const {key, r} = res.value;
@@ -1917,15 +1922,19 @@ async function cloudLoad(){
   }
 
   try{ const p=localStorage.getItem('asist_pers'); if(p) personalizados=JSON.parse(p); }catch(e){}
-  loadNotasFromLocal();
-  localSave();
-  refreshCurrentPage();
+  try{ loadNotasFromLocal(); }catch(e){}
+  try{ localSave(); }catch(e){}
+  try{ refreshCurrentPage(); }catch(err){
+    console.error('refreshCurrentPage error:', err);
+    // Fallback: render dashboard directly
+    try{ renderDashboard(); }catch(e2){ console.error('renderDashboard error:', e2); }
+  }
   if(loaded>0){
     setSyncStatus('cloudsaved');
-    showToast(`🟢 ${loaded} módulo(s) cargados desde Google Sheets`);
+    showToast(`🟢 ${loaded} módulo(s) cargados`);
   } else {
     setSyncStatus('error','Sin datos');
-    showToast('⚠️ No se pudo cargar. Verifica tu URL o revisa la consola.');
+    showToast('⚠️ GAS respondió pero sin datos válidos. Revisa la consola (F12).');
   }
 }
 
