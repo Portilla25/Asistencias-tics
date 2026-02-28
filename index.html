@@ -1867,9 +1867,17 @@ async function cloudLoad(){
     ]);
   }
 
+  // Actualizar indicador con progreso
+  let loadedCount=0;
+  const updateProgress=()=>{
+    const el=document.getElementById('syncIndicator');
+    if(el) el.innerHTML=`<span style="color:var(--yellow-l);font-size:.75rem">🔄 Cargando ${loadedCount}/8...</span>`;
+  };
+  updateProgress();
+
   // Todas las peticiones en paralelo
   const results = await Promise.allSettled(
-    keys.map(key => gasGetTimeout({ action:'load', key }).then(r=>({key,r})))
+    keys.map(key => gasGetTimeout({ action:'load', key }).then(r=>{ loadedCount++; updateProgress(); return {key,r}; }))
   );
 
   let loaded=0;
@@ -1922,9 +1930,11 @@ async function cloudLoad(){
 }
 
 function refreshCurrentPage(){
-  if(currentPage==='dashboard') renderDashboard();
+  if(!currentPage||currentPage==='dashboard') renderDashboard();
   else if(currentPage==='personalizados') renderPersonalizados();
-  else renderModule(currentPage);
+  else if(currentPage==='mensual') renderMensual();
+  else if(currentPage==='historial') renderHistorialMini();
+  else { renderModule(currentPage); setTimeout(()=>initDateBar(currentPage),50); }
 }
 
 // ── Modal de configuración ────────────────────────────────────────
