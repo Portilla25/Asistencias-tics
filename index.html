@@ -1809,9 +1809,11 @@ function gasPost(payload){
 // ── GAS GET (sí lee respuesta) ────────────────────────────────────
 async function gasGet(params){
   const url=GAS_URL+'?'+new URLSearchParams(params).toString();
-  const res=await fetch(url);
-  if(!res.ok) throw new Error(res.status);
-  return res.json();
+  const res=await fetch(url, { redirect:'follow' });
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const text=await res.text();
+  try{ return JSON.parse(text); }
+  catch(e){ throw new Error('Respuesta no JSON: '+text.slice(0,120)); }
 }
 
 // ── Sync actions ──────────────────────────────────────────────────
@@ -1852,69 +1854,70 @@ async function cloudLoad(){
   setSyncStatus('loading');
   showToast('🔄 Cargando desde Google Sheets...');
   const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
-  let loaded=0;
 
-  // Solo preservar motivos del localStorage (lo único que no está en Sheets)
+  // Preservar motivos y notas del localStorage
   const localRaw=localStorage.getItem('asist_state');
   const localState=localRaw?JSON.parse(localRaw):{};
 
-  for(const key of keys){
-    try{
-      const r=await gasGet({ action:'load', key });
-      if(r.ok){
-        // Convertir todos los IDs a Number para consistencia
-        const alumnos=(r.alumnos||[]).map(a=>({...a, id:Number(a.id)}));
-        const retirados=(r.retirados||[]).map(a=>({...a, id:Number(a.id)}));
+  // Fetch con timeout de 15s por módulo
+  function gasGetTimeout(params, ms=15000){
+    return Promise.race([
+      gasGet(params),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))
+    ]);
+  }
 
-        // Asistencias: usar SIEMPRE los de Sheets (fuente de verdad)
-        const asistencias={};
-        Object.entries(r.asistencias||{}).forEach(([k,v])=>{
-          asistencias[Number(k)]=v;
-        });
+  // Todas las peticiones en paralelo
+  const results = await Promise.allSettled(
+    keys.map(key => gasGetTimeout({ action:'load', key }).then(r=>({key,r})))
+  );
 
-        // Retirados locales pendientes de sync (marcados en web pero Sheets aún no procesó)
-        const localRetirados=(localState[key]&&localState[key].retirados)||[];
-        const retiradosMerge=[...retirados];
-        localRetirados.forEach(lr=>{
-          const norm=String(lr.nombre||'').trim().toLowerCase();
-          const enSheets=retiradosMerge.some(r=>
-            String(r.nombre||'').trim().toLowerCase()===norm
-          );
-          if(!enSheets) retiradosMerge.push({...lr});
-        });
+  let loaded=0;
+  for(const res of results){
+    if(res.status!=='fulfilled') { console.warn('cloudLoad failed:', res.reason?.message); continue; }
+    const {key, r} = res.value;
+    if(!r?.ok) continue;
 
-        // Filtrar activos: quitar los que están en retiradosMerge
-        const retiradosNorm=retiradosMerge.map(r=>
-          String(r.nombre||'').trim().toLowerCase()
-        );
-        const alumnosFiltrados=alumnos.filter(a=>
-          !retiradosNorm.includes(String(a.nombre||'').trim().toLowerCase())
-        );
+    const alumnos=(r.alumnos||[]).map(a=>({...a, id:Number(a.id)}));
+    const retirados=(r.retirados||[]).map(a=>({...a, id:Number(a.id)}));
 
-        // Motivos solo del localStorage
-        const motivos=(localState[key]&&localState[key].motivos)||{};
+    const asistencias={};
+    Object.entries(r.asistencias||{}).forEach(([k,v])=>{ asistencias[Number(k)]=v; });
 
-        state[key]={
-          alumnos:    alumnosFiltrados,
-          retirados:  retiradosMerge,
-          asistencias: asistencias,
-          fechas:     r.fechas||[],
-          motivos:    motivos
-        };
-        loaded++;
-      }
-    }catch(e){ console.warn('cloudLoad error',key,e.message); }
+    const localRetirados=(localState[key]?.retirados)||[];
+    const retiradosMerge=[...retirados];
+    localRetirados.forEach(lr=>{
+      const norm=String(lr.nombre||'').trim().toLowerCase();
+      if(!retiradosMerge.some(r=>String(r.nombre||'').trim().toLowerCase()===norm))
+        retiradosMerge.push({...lr});
+    });
+
+    const retiradosNorm=retiradosMerge.map(r=>String(r.nombre||'').trim().toLowerCase());
+    const alumnosFiltrados=alumnos.filter(a=>
+      !retiradosNorm.includes(String(a.nombre||'').trim().toLowerCase())
+    );
+
+    state[key]={
+      alumnos:     alumnosFiltrados,
+      retirados:   retiradosMerge,
+      asistencias: asistencias,
+      fechas:      r.fechas||[],
+      motivos:     localState[key]?.motivos||{},
+      notas:       localState[key]?.notas||{}
+    };
+    loaded++;
   }
 
   try{ const p=localStorage.getItem('asist_pers'); if(p) personalizados=JSON.parse(p); }catch(e){}
+  loadNotasFromLocal();
   localSave();
   refreshCurrentPage();
   if(loaded>0){
     setSyncStatus('cloudsaved');
     showToast(`🟢 ${loaded} módulo(s) cargados desde Google Sheets`);
   } else {
-    setSyncStatus('error','No se pudo cargar');
-    showToast('⚠️ No se pudo conectar con Sheets. Verifica tu URL.');
+    setSyncStatus('error','Sin datos');
+    showToast('⚠️ No se pudo cargar. Verifica tu URL o revisa la consola.');
   }
 }
 
@@ -1950,7 +1953,8 @@ function showCloudConfig(){
     <div class="flabel">URL del Apps Script</div>
     <input class="finp" id="gasUrlInp" placeholder="https://script.google.com/macros/s/.../exec" value="${GAS_URL}" style="font-size:.73rem;">
   </div>
-  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Actualmente conectado · <span onclick="cloudLoad();closeModal();" style="color:var(--amber);cursor:pointer">Recargar desde Sheets</span></div>`:''}`;
+  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Actualmente conectado · <span onclick="cloudLoad();closeModal();" style="color:var(--amber);cursor:pointer">Recargar desde Sheets</span> · <span onclick="diagnosticoGAS();" style="color:var(--sky-l);cursor:pointer">🔍 Diagnóstico</span></div>`:''}
+  <div id="diagResult" style="margin-top:8px;font-size:.72rem;display:none"></div>`; 
 
   showModal('☁️ Sincronización con Google Sheets','',async()=>{
     const url=document.getElementById('gasUrlInp')?.value.trim();
@@ -1975,6 +1979,38 @@ function showCloudConfig(){
       };
       btns.prepend(b);
     },60);
+  }
+}
+
+
+// ── Diagnóstico de conexión GAS ───────────────────────────────────
+async function diagnosticoGAS(){
+  const el=document.getElementById('diagResult'); if(!el) return;
+  el.style.display='block';
+  el.style.color='var(--muted)';
+  el.textContent='🔍 Probando conexión...';
+  if(!GAS_URL){ el.textContent='⚠️ No hay URL configurada.'; return; }
+  try{
+    const r=await Promise.race([
+      gasGet({action:'load', key:'M-1'}),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('Timeout 10s')),10000))
+    ]);
+    if(r?.ok){
+      el.style.color='var(--green-l)';
+      el.textContent=`✅ Conexión OK — ${(r.alumnos||[]).length} alumnos en Mañana M1`;
+    } else {
+      el.style.color='var(--red-l)';
+      el.textContent='❌ GAS respondió pero con error: '+(r?.error||'desconocido');
+    }
+  } catch(e){
+    el.style.color='var(--red-l)';
+    if(e.message.includes('Timeout')){
+      el.textContent='⏱ Timeout — GAS tarda demasiado. Verifica que el Web App esté publicado como "Cualquier persona".';
+    } else if(e.message.includes('Failed to fetch')||e.message.includes('NetworkError')){
+      el.textContent='🌐 Error de red/CORS — Asegúrate de que el acceso sea "Cualquier persona" (sin cuenta de Google).';
+    } else {
+      el.textContent='❌ Error: '+e.message;
+    }
   }
 }
 
