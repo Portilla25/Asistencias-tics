@@ -2018,12 +2018,19 @@ function showFirebaseConfig(){
   showModal('🔥 Configurar Firebase','',async()=>{
     let raw=document.getElementById('fbCfgInp')?.value.trim();
     if(!raw){ showToast('⚠️ Pega el firebaseConfig'); return; }
-    // Limpiar: extraer JSON si el usuario pegó "const firebaseConfig = {...};"
+    // Extraer el objeto {...} aunque venga con "const firebaseConfig = "
     const m=raw.match(/\{[\s\S]*\}/);
     if(m) raw=m[0];
     let cfg;
-    try{ cfg=JSON.parse(raw); }
-    catch(e){ showToast('⚠️ JSON inválido — verifica el formato'); return; }
+    try{
+      // Intentar JSON estricto primero
+      cfg=JSON.parse(raw);
+    } catch(e){
+      // Si falla (claves sin comillas = JS syntax), usar Function eval seguro
+      try{
+        cfg = new Function('return ('+raw+')')();
+      } catch(e2){ showToast('⚠️ Formato inválido — verifica el firebaseConfig'); return; }
+    }
     if(!cfg.apiKey||!cfg.projectId){ showToast('⚠️ Falta apiKey o projectId'); return; }
     const ok=fbInit(cfg);
     if(!ok){ showToast('❌ Error al inicializar Firebase'); return; }
