@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Asistencias — Redes & TICs</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -587,7 +590,7 @@ tr:hover td{background:rgba(245,158,11,.025);}
       <div id="globalResults"></div>
     </div>
     <div id="syncIndicator"></div>
-    <button class="btn btn-outline" style="font-size:.72rem;padding:5px 10px" onclick="showCloudConfig()" title="Configurar Google Sheets">☁️ Sheets</button>
+    <button class="btn btn-outline" style="font-size:.72rem;padding:5px 10px" onclick="showFirebaseConfig()" title="Configurar Firebase">🔥 Firebase</button>
     <div class="topbar-date" id="topbarDate"></div>
   </div>
 
@@ -1327,14 +1330,7 @@ function retirarAlumno(key,id){
       renderModule(key);
       scheduleSync();
 
-      if(GAS_URL && alumno.fila){
-        setSyncStatus('saving');
-        try{
-          await fetch(GAS_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},
-            body:JSON.stringify({action:'retirarAlumno',key,fila:alumno.fila,nombre:alumno.nombre})});
-          setSyncStatus('cloudsaved');
-        }catch(e){ setSyncStatus('error','Error al retirar en Sheets'); }
-      }
+
       if(typeof addHistorial==='function'){
         const lbl=key.replace('M-','Mañana M').replace('T-','Tarde M');
         addHistorial('📤',`${alumno.nombre} retirado`,lbl);
@@ -1366,23 +1362,14 @@ function renderChart(key){
 }
 
 // ── Alerta por correo ─────────────────────────────────────────────
+// (Las alertas por email ya no requieren Google Apps Script)
 function checkAndSendAlert(key,id){
-  if(!GAS_URL) return;
   const d=state[key];
-  const a=d.alumnos.find(x=>x.id===id); if(!a||!a.correo) return;
+  const a=d.alumnos.find(x=>x.id===id); if(!a) return;
   const thr=parseInt(document.getElementById(`thr-${key}`)?.value||3);
   const faltas=Object.values(d.asistencias[id]||{}).filter(v=>v==='Falta').length;
-  if(faltas===thr){ // solo al alcanzar exactamente el umbral
-    const [t,m]=key.split('-');
-    gasPost({
-      action:'sendAlert',
-      nombre: a.nombre,
-      correo: a.correo,
-      faltas,
-      modulo: `${t==='M'?'Mañana':'Tarde'} Módulo ${m}`,
-      umbral: thr
-    });
-    showToast(`📧 Alerta enviada a ${a.correo}`);
+  if(faltas===thr && a.correo){
+    showToast(`⚠️ ${a.nombre} alcanzó ${faltas} faltas`);
   }
 }
 
@@ -1804,202 +1791,184 @@ function exportPersonalizados(){
 // ═══════════════════════════════════════════════════════════════════
 // 💾 SYNC — localStorage (instantáneo) + Google Sheets (background)
 // ═══════════════════════════════════════════════════════════════════
-let GAS_URL = localStorage.getItem('gas_url') || '';
+// ═══════════════════════════════════════════════════════════════════
+// FIREBASE — configuración y sincronización
+// ═══════════════════════════════════════════════════════════════════
+let fbApp = null;
+let fbDb  = null;
+
+function fbConfigured(){ return !!fbDb; }
+
+function fbInit(cfg){
+  try {
+    if(fbApp) { try{ firebase.app(); }catch(e){} }
+    fbApp = firebase.initializeApp(cfg, 'asistencias');
+    fbDb  = firebase.firestore(fbApp);
+    fbDb.settings({ merge: true });
+    localStorage.setItem('fb_config', JSON.stringify(cfg));
+    return true;
+  } catch(e) {
+    // Si ya existe la app con mismo nombre, reutilizarla
+    try {
+      fbApp = firebase.app('asistencias');
+      fbDb  = firebase.firestore(fbApp);
+      return true;
+    } catch(e2) {
+      console.error('fbInit error:', e2.message);
+      return false;
+    }
+  }
+}
 
 // ── localStorage ──────────────────────────────────────────────────
 function localSave(){
   try{
     localStorage.setItem('asist_state', JSON.stringify(state));
     localStorage.setItem('asist_pers',  JSON.stringify(personalizados));
-    // Guardar notas separado para acceso rápido
     const notasOut={};
-    ['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'].forEach(k=>{
-      if(state[k]?.notas) notasOut[k]=state[k].notas;
-    });
+    Object.keys(state).forEach(k=>{ if(state[k]?.notas) notasOut[k]=state[k].notas; });
     localStorage.setItem('asist_notas', JSON.stringify(notasOut));
-  }catch(e){ console.warn('localStorage error',e); }
+  }catch(e){ console.warn('localSave:',e.message); }
 }
 
 function localLoad(){
   try{
-    const s=localStorage.getItem('asist_state');
+    const raw=localStorage.getItem('asist_state');
+    if(!raw) return false;
+    const parsed=JSON.parse(raw);
+    const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
+    let found=false;
+    keys.forEach(k=>{
+      if(!parsed[k]) return;
+      if(!state[k]) state[k]={alumnos:[],retirados:[],asistencias:{},fechas:[],motivos:{},notas:{}};
+      if(parsed[k].alumnos)     state[k].alumnos     = parsed[k].alumnos;
+      if(parsed[k].retirados)   state[k].retirados   = parsed[k].retirados;
+      if(parsed[k].asistencias) state[k].asistencias = parsed[k].asistencias;
+      if(parsed[k].fechas)      state[k].fechas      = parsed[k].fechas;
+      if(parsed[k].motivos)     state[k].motivos     = parsed[k].motivos;
+      if(parsed[k].notas)       state[k].notas       = parsed[k].notas;
+      if((parsed[k].alumnos||[]).length>0) found=true;
+    });
     const p=localStorage.getItem('asist_pers');
-    if(s){
-      const parsed=JSON.parse(s);
-      const KEYS=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
-      KEYS.forEach(k=>{
-        if(!parsed[k]) return;
-        if(!state[k]) state[k]={ alumnos:[], retirados:[], asistencias:{}, fechas:[], motivos:{}, notas:{} };
-        // Cargar todo desde localStorage
-        if(parsed[k].alumnos)     state[k].alumnos     = parsed[k].alumnos;
-        if(parsed[k].retirados)   state[k].retirados   = parsed[k].retirados;
-        if(parsed[k].asistencias) state[k].asistencias = parsed[k].asistencias;
-        if(parsed[k].fechas)      state[k].fechas      = parsed[k].fechas;
-        if(parsed[k].motivos)     state[k].motivos     = parsed[k].motivos;
-        if(parsed[k].notas)       state[k].notas       = parsed[k].notas;
-      });
-    }
     if(p) personalizados=JSON.parse(p);
-    return !!(s||p);
-  }catch(e){ console.warn('localLoad error',e); return false; }
+    return found;
+  }catch(e){ console.warn('localLoad:',e.message); return false; }
 }
 
-// ── Indicador ─────────────────────────────────────────────────────
+// ── setSyncStatus ─────────────────────────────────────────────────
 function setSyncStatus(s, msg=''){
   const el=document.getElementById('syncIndicator'); if(!el) return;
-  const map={
-    saved:        {icon:'💾', text:'Guardado',       color:'var(--green)'},
-    cloudsaved:   {icon:'🟢', text:'Sincronizado',   color:'var(--green)'},
-    saving:       {icon:'🔄', text:'Guardando...',   color:'var(--yellow)'},
-    loading:      {icon:'🔄', text:'Cargando...',    color:'var(--yellow)'},
-    error:        {icon:'🔴', text:msg||'Error',     color:'var(--red)'},
-    unconfigured: {icon:'☁️', text:'Conectar Sheets',color:'var(--muted)'},
+  const M={
+    loading:     { icon:'🔄', text:'Cargando...',   color:'var(--yellow)' },
+    saving:      { icon:'💾', text:'Guardando...',  color:'var(--yellow)' },
+    cloudsaved:  { icon:'🔥', text:'Firebase ✓',    color:'var(--green)'  },
+    saved:       { icon:'💾', text:'Local ✓',       color:'var(--muted)'  },
+    unconfigured:{ icon:'🔥', text:'Sin Firebase',  color:'var(--muted)'  },
+    error:       { icon:'❌', text:msg||'Error',    color:'var(--red)'    }
   };
-  const m=map[s]||map.saved;
-  el.innerHTML=`<span onclick="showCloudConfig()" style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer" title="Configurar Google Sheets">${m.icon} ${m.text}</span>`;
+  const m=M[s]||M.saved;
+  el.innerHTML=`<span onclick="showFirebaseConfig()" style="color:${m.color};font-size:.75rem;display:flex;align-items:center;gap:4px;cursor:pointer" title="Configurar Firebase">${m.icon} ${m.text}</span>`;
 }
 
-// ── scheduleSync: guarda local YA — nunca bloquea UI ──────────────
+// ── scheduleSync: guarda local + Firebase ─────────────────────────
+let _syncTimer=null;
 function scheduleSync(){
   localSave();
-  setSyncStatus(GAS_URL ? 'cloudsaved' : 'saved');
+  setSyncStatus(fbConfigured() ? 'saving' : 'saved');
+  clearTimeout(_syncTimer);
+  _syncTimer=setTimeout(()=>fbSaveAll(), 800);
 }
 
-// ── GAS POST fire-and-forget (no bloquea UI) ──────────────────────
-function gasPost(payload){
-  if(!GAS_URL) return;
-  fetch(GAS_URL,{
-    method:'POST', mode:'no-cors',
-    headers:{'Content-Type':'text/plain'},
-    body:JSON.stringify(payload)
-  }).catch(e=>console.warn('GAS post:',e.message));
+// ── Firebase: guardar módulo completo ─────────────────────────────
+async function fbSaveModulo(key){
+  if(!fbConfigured()) return;
+  const d = state[key];
+  if(!d) return;
+  try {
+    await fbDb.collection('modulos').doc(key).set({
+      alumnos:     d.alumnos     || [],
+      retirados:   d.retirados   || [],
+      asistencias: d.asistencias || {},
+      fechas:      d.fechas      || [],
+      motivos:     d.motivos     || {},
+      notas:       d.notas       || {},
+      updatedAt:   firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch(e){ console.warn('fbSaveModulo', key, e.message); }
 }
 
-// ── GAS GET (sí lee respuesta) ────────────────────────────────────
-async function gasGet(params){
-  const url=GAS_URL+'?'+new URLSearchParams(params).toString();
-  const res=await fetch(url, { redirect:'follow' });
-  if(!res.ok) throw new Error('HTTP '+res.status);
-  const text=await res.text();
-  try{ return JSON.parse(text); }
-  catch(e){ throw new Error('Respuesta no JSON: '+text.slice(0,120)); }
+async function fbSavePersonalizados(){
+  if(!fbConfigured()) return;
+  try {
+    await fbDb.collection('personalizados').doc('main').set({
+      list: personalizados || [],
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  } catch(e){ console.warn('fbSavePersonalizados:', e.message); }
 }
 
-// ── Sync actions ──────────────────────────────────────────────────
-function syncAsist(key, alumnoId, fecha, valor, motivo=''){
-  const alumno=state[key]?.alumnos.find(a=>a.id===alumnoId);
-  if(!alumno?.fila) return;
-  gasPost({ action:'setAsist', key, fila:alumno.fila, fecha, valor, motivo });
+async function fbSaveAll(){
+  if(!fbConfigured()){ setSyncStatus('saved'); return; }
+  try {
+    const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
+    await Promise.all([
+      ...keys.map(k=>fbSaveModulo(k)),
+      fbSavePersonalizados()
+    ]);
+    setSyncStatus('cloudsaved');
+  } catch(e){
+    setSyncStatus('error','Error al guardar');
+    console.error('fbSaveAll:', e.message);
+  }
 }
 
-function syncAddAlumno(key, alumno){
-  if(!alumno) return;
-  gasPost({ action:'addAlumno', key, alumno:{
-    nombre: alumno.nombre||'',
-    dni:    alumno.dni||'',
-    correo: alumno.correo||'',
-    fecha:  alumno.fecha||'',
-    cel:    alumno.cel||'',
-    edad:   alumno.edad||''
-  }});
-}
-
-function syncDeleteAlumno(key, fila, nombre){
-  if(!fila) return;
-  gasPost({ action:'deleteAlumno', key, fila, nombre: nombre||'' });
-}
-
-function syncPersonalizados(){ localSave(); }
-
-// ── Cargar UN módulo desde Sheets ─────────────────────────────────
-// ── Cargar todos los módulos desde Sheets ─────────────────────────
-async function cloudLoad(){
-  if(!GAS_URL){
+// ── Firebase: cargar todos los módulos ────────────────────────────
+async function fbLoad(){
+  if(!fbConfigured()){
     const ok=localLoad();
-    if(ok){ refreshCurrentPage(); showToast('💾 Datos restaurados del navegador'); }
+    if(ok){ refreshCurrentPage(); showToast('💾 Datos del navegador restaurados'); }
     setSyncStatus('unconfigured');
     return;
   }
   setSyncStatus('loading');
-  showToast('🔄 Cargando desde Google Sheets...');
   const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
-
-  // Preservar motivos y notas del localStorage
-  const localRaw=localStorage.getItem('asist_state');
-  const localState=localRaw?JSON.parse(localRaw):{};
-
-  // Fetch con timeout de 15s por módulo
-  function gasGetTimeout(params, ms=15000){
-    return Promise.race([
-      gasGet(params),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))
+  try {
+    const [snapshots, persSnap] = await Promise.all([
+      Promise.all(keys.map(k=>fbDb.collection('modulos').doc(k).get())),
+      fbDb.collection('personalizados').doc('main').get()
     ]);
-  }
 
-  // Actualizar indicador con progreso
-  let loadedCount=0;
-  const updateProgress=()=>{
-    const el=document.getElementById('syncIndicator');
-    if(el) el.innerHTML=`<span style="color:var(--yellow-l);font-size:.75rem">🔄 Cargando ${loadedCount}/8...</span>`;
-  };
-  updateProgress();
-
-  // Todas las peticiones en paralelo
-  const results = await Promise.allSettled(
-    keys.map(key => gasGetTimeout({ action:'load', key }).then(r=>{ loadedCount++; updateProgress(); return {key,r}; }))
-  );
-
-  let loaded=0;
-  console.log('[cloudLoad] results:', results.map(r=>r.status==='fulfilled'?{key:r.value?.key,ok:r.value?.r?.ok,n:(r.value?.r?.alumnos||[]).length}:r.reason?.message));
-  for(const res of results){
-    if(res.status!=='fulfilled') { console.warn('cloudLoad failed:', res.reason?.message); continue; }
-    const {key, r} = res.value;
-    if(!r?.ok) continue;
-
-    const alumnos=(r.alumnos||[]).map(a=>({...a, id:Number(a.id)}));
-    const retirados=(r.retirados||[]).map(a=>({...a, id:Number(a.id)}));
-
-    const asistencias={};
-    Object.entries(r.asistencias||{}).forEach(([k,v])=>{ asistencias[Number(k)]=v; });
-
-    const localRetirados=(localState[key]?.retirados)||[];
-    const retiradosMerge=[...retirados];
-    localRetirados.forEach(lr=>{
-      const norm=String(lr.nombre||'').trim().toLowerCase();
-      if(!retiradosMerge.some(r=>String(r.nombre||'').trim().toLowerCase()===norm))
-        retiradosMerge.push({...lr});
+    let loaded=0;
+    snapshots.forEach((snap, i)=>{
+      const key=keys[i];
+      if(!snap.exists) return;
+      const d=snap.data();
+      state[key]={
+        alumnos:     d.alumnos     || [],
+        retirados:   d.retirados   || [],
+        asistencias: d.asistencias || {},
+        fechas:      d.fechas      || [],
+        motivos:     d.motivos     || {},
+        notas:       d.notas       || {}
+      };
+      loaded++;
     });
 
-    const retiradosNorm=retiradosMerge.map(r=>String(r.nombre||'').trim().toLowerCase());
-    const alumnosFiltrados=alumnos.filter(a=>
-      !retiradosNorm.includes(String(a.nombre||'').trim().toLowerCase())
-    );
+    if(persSnap.exists){
+      const pd=persSnap.data();
+      personalizados = pd.list || [];
+    }
 
-    state[key]={
-      alumnos:     alumnosFiltrados,
-      retirados:   retiradosMerge,
-      asistencias: asistencias,
-      fechas:      r.fechas||[],
-      motivos:     localState[key]?.motivos  || state[key]?.motivos  || {},
-      notas:       localState[key]?.notas    || state[key]?.notas    || {}
-    };
-    loaded++;
-  }
-
-  try{ const p=localStorage.getItem('asist_pers'); if(p) personalizados=JSON.parse(p); }catch(e){}
-  
-  try{ localSave(); }catch(e){}
-  try{ refreshCurrentPage(); }catch(err){
-    console.error('refreshCurrentPage error:', err);
-    // Fallback: render dashboard directly
-    try{ renderDashboard(); }catch(e2){ console.error('renderDashboard error:', e2); }
-  }
-  if(loaded>0){
+    localSave();
+    refreshCurrentPage();
     setSyncStatus('cloudsaved');
-    showToast(`🟢 ${loaded} módulo(s) cargados`);
-  } else {
-    setSyncStatus('error','Sin datos');
-    showToast('⚠️ GAS respondió pero sin datos válidos. Revisa la consola (F12).');
+    showToast(`🔥 ${loaded} módulo(s) cargados desde Firebase`);
+  } catch(e){
+    console.error('fbLoad:', e.message);
+    // Fallback a localStorage
+    const ok=localLoad();
+    if(ok){ refreshCurrentPage(); showToast('⚠️ Firebase falló — datos locales restaurados'); }
+    setSyncStatus('error', e.message.includes('permission')?'Verifica reglas Firestore':e.message.slice(0,30));
   }
 }
 
@@ -2011,53 +1980,68 @@ function refreshCurrentPage(){
   else { renderModule(currentPage); setTimeout(()=>initDateBar(currentPage),50); }
 }
 
-// ── Modal de configuración ────────────────────────────────────────
-function showCloudConfig(){
-  const connected=!!GAS_URL;
+// ── Funciones de sync por acción (todas delegan a scheduleSync) ───
+function syncAsist(key){ scheduleSync(); }
+function syncAddAlumno(key){ scheduleSync(); }
+function syncDeleteAlumno(key){ scheduleSync(); }
+function syncPersonalizados(){ localSave(); fbSavePersonalizados().then(()=>setSyncStatus('cloudsaved')); }
+function syncNota(key){ scheduleSync(); }
+function syncEliminarTema(key){ scheduleSync(); }
+
+// ── Modal de configuración Firebase ──────────────────────────────
+function showFirebaseConfig(){
+  const connected = fbConfigured();
+  const savedCfg  = localStorage.getItem('fb_config');
+
   const html=`
-  <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:.79rem;color:var(--muted);line-height:1.85;margin-bottom:14px;">
-    <strong style="color:var(--text);font-size:.88rem;">📋 Conectar con Google Sheets</strong>
-    <span style="display:block;font-size:.71rem;color:var(--muted2);margin-bottom:8px;">Solo una vez — luego todo es automático</span>
-    <ol style="margin:0 0 0 16px;display:flex;flex-direction:column;gap:4px;">
-      <li>Crea estas 8 hojas en tu Google Sheet:<br>
-        <code style="background:var(--s3);padding:2px 6px;border-radius:3px;font-size:.7rem">Mañana M1, Mañana M2, Mañana M3, Mañana M4, Tarde M1, Tarde M2, Tarde M3, Tarde M4</code></li>
-      <li>Cada hoja con cabecera en fila 1:<br>
-        <code style="background:var(--s3);padding:2px 6px;border-radius:3px;font-size:.7rem">Nombres y Apellidos | DNI | NACIMIENTO | CELULAR | EDAD</code></li>
-      <li>Copia el <strong style="color:var(--text)">ID de tu Sheet</strong> desde la URL y pégalo en el archivo <code style="background:var(--s3);padding:1px 5px;border-radius:3px">Code.gs</code></li>
-      <li>Ve a <a href="https://script.google.com" target="_blank" style="color:var(--amber)">script.google.com</a> → Nuevo proyecto → pega el código del <code style="background:var(--s3);padding:1px 5px;border-radius:3px">Code.gs</code></li>
-      <li><strong style="color:var(--text)">Implementar → Nueva implementación → Aplicación web</strong><br>
-        Ejecutar como: <strong style="color:var(--text)">Yo</strong> · Acceso: <strong style="color:var(--text)">Cualquier usuario</strong></li>
-      <li>Autorizar → copiar URL → pegarla abajo ↓</li>
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:.79rem;color:var(--muted);line-height:1.8;margin-bottom:14px">
+    <strong style="color:var(--text);font-size:.88rem">🔥 Conectar con Firebase</strong>
+    <span style="display:block;font-size:.71rem;color:var(--muted2);margin-bottom:10px">Solo una vez — luego sincroniza automático desde cualquier dispositivo</span>
+    <ol style="margin:0 0 0 16px;display:flex;flex-direction:column;gap:6px">
+      <li>Ve a <a href="https://console.firebase.google.com" target="_blank" style="color:var(--amber)">console.firebase.google.com</a></li>
+      <li>Crea un proyecto nuevo (ej: <strong style="color:var(--text)">asistencias-redes</strong>)</li>
+      <li>En el proyecto: <strong style="color:var(--text)">Firestore Database → Crear base de datos → Modo producción</strong></li>
+      <li>Reglas de Firestore — pega esto y guarda:<br>
+        <code style="background:var(--s3);padding:4px 8px;border-radius:4px;font-size:.7rem;display:block;margin-top:4px;line-height:1.6">rules_version = '2';<br>service cloud.firestore {<br>&nbsp; match /databases/{db}/documents {<br>&nbsp;&nbsp; match /{document=**} {<br>&nbsp;&nbsp;&nbsp; allow read, write: if true;<br>&nbsp;&nbsp; }<br>&nbsp; }<br>}</code>
+      </li>
+      <li>Ir a <strong style="color:var(--text)">Configuración del proyecto → Tus apps → Agregar app web (&lt;/&gt;)</strong></li>
+      <li>Copiar el objeto <code style="background:var(--s3);padding:1px 5px;border-radius:3px">firebaseConfig</code> y pegarlo abajo ↓</li>
     </ol>
-    <div style="margin-top:10px;padding:8px;background:rgba(34,197,94,.07);border:1px solid rgba(34,197,94,.2);border-radius:6px;font-size:.72rem;color:var(--green);">
-      💾 Tus datos están seguros en este navegador mientras configuras.
-    </div>
   </div>
   <div class="fgroup">
-    <div class="flabel">URL del Apps Script</div>
-    <input class="finp" id="gasUrlInp" placeholder="https://script.google.com/macros/s/.../exec" value="${GAS_URL}" style="font-size:.73rem;">
+    <div class="flabel">Objeto firebaseConfig (JSON)</div>
+    <textarea class="finp" id="fbCfgInp" rows="7" style="font-family:'JetBrains Mono',monospace;font-size:.72rem;resize:vertical;width:100%">${savedCfg||''}</textarea>
+    <div style="font-size:.7rem;color:var(--muted);margin-top:4px">Pega todo el objeto <code>{ apiKey: "...", ... }</code></div>
   </div>
-  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Actualmente conectado · <span onclick="cloudLoad();closeModal();" style="color:var(--amber);cursor:pointer">Recargar desde Sheets</span> · <span onclick="diagnosticoGAS();" style="color:var(--sky-l);cursor:pointer">🔍 Diagnóstico</span></div>`:''}
-  <div id="diagResult" style="margin-top:8px;font-size:.72rem;display:none"></div>`; 
+  ${connected?`<div style="margin-top:8px;font-size:.72rem;color:var(--green)">🟢 Conectado · <span onclick="fbLoad();closeModal();" style="color:var(--amber);cursor:pointer">↺ Recargar desde Firebase</span></div>`:''}`;
 
-  showModal('☁️ Sincronización con Google Sheets','',async()=>{
-    const url=document.getElementById('gasUrlInp')?.value.trim();
-    if(!url){showToast('⚠️ Pega la URL del Apps Script');return;}
-    if(!url.includes('script.google.com')){showToast('⚠️ La URL no parece válida');return;}
-    GAS_URL=url; localStorage.setItem('gas_url',url);
+  showModal('🔥 Configurar Firebase','',async()=>{
+    let raw=document.getElementById('fbCfgInp')?.value.trim();
+    if(!raw){ showToast('⚠️ Pega el firebaseConfig'); return; }
+    // Limpiar: extraer JSON si el usuario pegó "const firebaseConfig = {...};"
+    const m=raw.match(/\{[\s\S]*\}/);
+    if(m) raw=m[0];
+    let cfg;
+    try{ cfg=JSON.parse(raw); }
+    catch(e){ showToast('⚠️ JSON inválido — verifica el formato'); return; }
+    if(!cfg.apiKey||!cfg.projectId){ showToast('⚠️ Falta apiKey o projectId'); return; }
+    const ok=fbInit(cfg);
+    if(!ok){ showToast('❌ Error al inicializar Firebase'); return; }
     closeModal();
-    await cloudLoad();
-  },html);
-  document.getElementById('mOk').textContent=connected?'Actualizar URL':'Conectar';
+    showToast('🔥 Firebase conectado. Cargando datos...');
+    await fbLoad();
+  }, html);
+  document.getElementById('mOk').textContent = connected ? 'Actualizar' : 'Conectar';
 
   if(connected){
     setTimeout(()=>{
       const btns=document.querySelector('.modal-btns'); if(!btns) return;
-      if(document.getElementById('discBtn')) return;
+      if(document.getElementById('fbDiscBtn')) return;
       const b=document.createElement('button');
-      b.id='discBtn'; b.className='btn btn-red'; b.textContent='Desconectar';
+      b.id='fbDiscBtn'; b.className='btn btn-red'; b.textContent='Desconectar';
       b.onclick=()=>{
-        GAS_URL=''; localStorage.removeItem('gas_url');
+        fbDb=null; fbApp=null;
+        localStorage.removeItem('fb_config');
         closeModal(); setSyncStatus('unconfigured');
         showToast('Desconectado. Datos siguen en este navegador.');
       };
@@ -2066,46 +2050,20 @@ function showCloudConfig(){
   }
 }
 
-
-// ── Diagnóstico de conexión GAS ───────────────────────────────────
-async function diagnosticoGAS(){
-  const el=document.getElementById('diagResult'); if(!el) return;
-  el.style.display='block';
-  el.style.color='var(--muted)';
-  el.textContent='🔍 Probando conexión...';
-  if(!GAS_URL){ el.textContent='⚠️ No hay URL configurada.'; return; }
-  try{
-    const r=await Promise.race([
-      gasGet({action:'load', key:'M-1'}),
-      new Promise((_,rej)=>setTimeout(()=>rej(new Error('Timeout 10s')),10000))
-    ]);
-    if(r?.ok){
-      el.style.color='var(--green-l)';
-      el.textContent=`✅ Conexión OK — ${(r.alumnos||[]).length} alumnos en Mañana M1`;
-    } else {
-      el.style.color='var(--red-l)';
-      el.textContent='❌ GAS respondió pero con error: '+(r?.error||'desconocido');
-    }
-  } catch(e){
-    el.style.color='var(--red-l)';
-    if(e.message.includes('Timeout')){
-      el.textContent='⏱ Timeout — GAS tarda demasiado. Verifica que el Web App esté publicado como "Cualquier persona".';
-    } else if(e.message.includes('Failed to fetch')||e.message.includes('NetworkError')){
-      el.textContent='🌐 Error de red/CORS — Asegúrate de que el acceso sea "Cualquier persona" (sin cuenta de Google).';
-    } else {
-      el.textContent='❌ Error: '+e.message;
-    }
-  }
-}
-
 // ── INIT ──────────────────────────────────────────────────────────
 (function initData(){
-  if(GAS_URL){ cloudLoad(); }
-  else{
-    const ok=localLoad();
-    if(ok) setTimeout(()=>{ refreshCurrentPage(); showToast('💾 Datos restaurados'); },300);
-    setTimeout(()=>setSyncStatus('unconfigured'),150);
+  const savedCfg = localStorage.getItem('fb_config');
+  if(savedCfg){
+    try{
+      const cfg=JSON.parse(savedCfg);
+      const ok=fbInit(cfg);
+      if(ok){ fbLoad(); return; }
+    }catch(e){ console.warn('fbInit from storage:', e.message); }
   }
+  // Sin Firebase — cargar local
+  const ok=localLoad();
+  if(ok) setTimeout(()=>{ refreshCurrentPage(); showToast('💾 Datos restaurados'); }, 300);
+  setTimeout(()=>setSyncStatus('unconfigured'), 150);
 })();
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2378,18 +2336,7 @@ function reactivarAlumno(key,id){
       renderModule(key);
       scheduleSync();
 
-      // Sincronizar con Sheets — marcar ACTIVO
-      if(GAS_URL && alumno.fila){
-        setSyncStatus('saving');
-        try{
-          await fetch(GAS_URL,{
-            method:'POST',mode:'no-cors',
-            headers:{'Content-Type':'text/plain'},
-            body:JSON.stringify({action:'reactivarAlumno',key,fila:alumno.fila,nombre:alumno.nombre})
-          });
-          setSyncStatus('cloudsaved');
-        }catch(e){ setSyncStatus('error','Error al reactivar en Sheets'); }
-      }
+
       addHistorial('♻️',`${alumno.nombre} reactivado`,key.replace('M-','Mañana M').replace('T-','Tarde M'));
       showToast(`♻️ "${alumno.nombre}" reactivado`);
     }
@@ -2559,26 +2506,7 @@ function eliminarTema(key, temaId){
 }
 
 // ── Sync notas con Sheets ─────────────────────────────────────────
-function syncNota(key, temaId, alumnoId, valor){
-  const notas = getNotas(key);
-  const tema  = notas[temaId]; if(!tema) return;
-  const alumno = state[key]?.alumnos.find(a=>a.id===alumnoId); if(!alumno) return;
-  gasPost({
-    action:  'setNota',
-    key,
-    temaId,
-    temaNombre: tema.nombre,
-    alumnoNombre: alumno.nombre,
-    alumnoFila: alumno.fila,
-    valor: valor===''||valor===null ? '' : parseFloat(valor)
-  });
-}
-
-function syncEliminarTema(key, temaId){
-  gasPost({ action:'eliminarTema', key, temaId });
-}
-
-// notas persistence now integrated in localSave/localLoad
+// syncNota y syncEliminarTema ahora delegan a scheduleSync (Firebase)
 
 
 </script>
