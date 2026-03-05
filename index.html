@@ -570,7 +570,11 @@ tr:hover td{background:rgba(245,158,11,.025);}
   </div>
 
   <div class="sidebar-footer">
-    <button class="btn btn-green" style="width:100%" onclick="showExportModal()">⬇️ Exportar Excel</button>
+    <button class="btn btn-green" style="width:100%;margin-bottom:6px" onclick="showExportModal()">⬇️ Exportar Excel</button>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-outline" style="flex:1;font-size:.71rem;padding:5px 0" onclick="exportarBackupJSON()" title="Guardar copia de seguridad JSON">💾 Backup</button>
+      <button class="btn btn-outline" style="flex:1;font-size:.71rem;padding:5px 0" onclick="importarBackupJSON()" title="Restaurar desde backup JSON">📂 Restaurar</button>
+    </div>
     <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">
       <span id="themeLabel">🌙 Modo oscuro</span>
       <div class="toggle-track"><div class="toggle-thumb"></div></div>
@@ -2265,6 +2269,103 @@ function showFirebaseConfig(){
 }
 
 // ── INIT ──────────────────────────────────────────────────────────
+// ── Exportar backup JSON ─────────────────────────────────────────
+function exportarBackupJSON(){
+  const backup = {
+    version: 2,
+    fecha: new Date().toISOString(),
+    state: state,
+    personalizados: personalizados,
+    modulosMeta: modulosMeta
+  };
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `backup_asistencias_${today}.json`;
+  a.click();
+  showToast('💾 Backup guardado correctamente');
+}
+
+// ── Importar backup JSON ──────────────────────────────────────────
+function importarBackupJSON(){
+  const html = `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:.78rem;color:var(--muted);line-height:1.7">
+        <strong style="color:var(--text)">¿Cómo recuperar tus datos?</strong><br>
+        <span style="color:var(--amber);font-weight:600">Opción A — Tienes el archivo JSON:</span> haz clic en "Elegir archivo".<br>
+        <span style="color:var(--amber);font-weight:600">Opción B — Datos en HTML anterior:</span> abre el archivo HTML anterior, pulsa F12 → Consola y ejecuta:<br>
+        <code style="background:var(--s3);padding:3px 8px;border-radius:4px;font-size:.71rem;display:block;margin:6px 0">copy(localStorage.getItem('asist_state'))</code>
+        Luego pega el texto copiado en el área de abajo.
+      </div>
+      <div class="fgroup">
+        <div class="flabel">Archivo JSON de backup</div>
+        <input type="file" accept=".json" id="backupFile" class="finp" onchange="leerArchivoBackup(this)">
+      </div>
+      <div class="fgroup">
+        <div class="flabel">O pega el contenido del localStorage aquí</div>
+        <textarea class="finp" id="backupPaste" rows="5" style="font-family:'JetBrains Mono',monospace;font-size:.71rem;resize:vertical;width:100%" placeholder='{"M-1":{"alumnos":[...],...}}'></textarea>
+      </div>
+    </div>`;
+
+  showModal('📂 Restaurar datos', '', async () => {
+    const pasteVal = document.getElementById('backupPaste')?.value.trim();
+    if(!pasteVal){ showToast('⚠️ Pega el contenido o elige un archivo'); return; }
+    try {
+      let parsed = JSON.parse(pasteVal);
+      // Detectar si es backup completo (v2) o localStorage directo (asist_state)
+      if(parsed.version === 2 && parsed.state){
+        // Backup completo
+        aplicarBackup(parsed.state, parsed.personalizados||[], parsed.modulosMeta||{});
+      } else if(parsed['M-1'] || parsed['T-1']){
+        // Es directamente el asist_state
+        aplicarBackup(parsed, personalizados, modulosMeta);
+      } else {
+        showToast('⚠️ Formato no reconocido'); return;
+      }
+      closeModal();
+    } catch(e){
+      showToast('❌ JSON inválido: ' + e.message.slice(0,50));
+    }
+  }, html);
+  document.getElementById('mOk').textContent = 'Restaurar datos';
+}
+
+function leerArchivoBackup(input){
+  const file = input.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('backupPaste').value = e.target.result;
+  };
+  reader.readAsText(file);
+}
+
+function aplicarBackup(stateData, persData, metaData){
+  const keys=['M-1','M-2','M-3','M-4','T-1','T-2','T-3','T-4'];
+  let modulos=0;
+  keys.forEach(k=>{
+    if(!stateData[k]) return;
+    const d = stateData[k];
+    state[k] = {
+      alumnos:     d.alumnos     || [],
+      retirados:   d.retirados   || [],
+      asistencias: d.asistencias || {},
+      fechas:      d.fechas      || [],
+      motivos:     d.motivos     || {},
+      notas:       d.notas       || {}
+    };
+    if((d.alumnos||[]).length>0) modulos++;
+  });
+  if(persData?.length) personalizados = persData;
+  if(metaData && Object.keys(metaData).length) modulosMeta = metaData;
+  localSave();
+  refreshCurrentPage();
+  showToast(`✅ Restaurados ${modulos} módulo(s) con datos`);
+  // Subir a Firebase si está conectado
+  if(fbConfigured()){
+    fbSaveAll().then(()=>showToast('🔥 Datos subidos a Firebase'));
+  }
+}
+
 (function initData(){
   const savedCfg = localStorage.getItem('fb_config');
   // Siempre cargar local primero para que la UI no quede en blanco
