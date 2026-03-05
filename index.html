@@ -2121,11 +2121,30 @@ async function fbLoad(){
       fbDb.collection('personalizados').doc('main').get()
     ]);
 
+    // Verificar si Firebase tiene datos o está vacío
+    const fbTieneData = snapshots.some(s=>s.exists && (s.data()?.alumnos||[]).length>0);
+
+    if(!fbTieneData){
+      // Firebase vacío → subir datos locales a Firebase
+      console.log('[fbLoad] Firebase vacío — subiendo datos locales...');
+      showToast('🔄 Primera sincronización — subiendo datos a Firebase...');
+      await fbSaveAll();
+      setSyncStatus('cloudsaved');
+      showToast('🔥 Datos subidos a Firebase correctamente');
+      refreshCurrentPage();
+      return;
+    }
+
+    // Firebase tiene datos → cargarlos
     let loaded=0;
     snapshots.forEach((snap, i)=>{
       const key=keys[i];
       if(!snap.exists) return;
       const d=snap.data();
+      // Solo reemplazar si Firebase tiene más o igual alumnos que local
+      const fbAlumnos = (d.alumnos||[]).length;
+      const localAlumnos = (state[key]?.alumnos||[]).length;
+      if(fbAlumnos===0 && localAlumnos>0) return; // conservar local si FB vacío para este módulo
       state[key]={
         alumnos:     d.alumnos     || [],
         retirados:   d.retirados   || [],
@@ -2139,19 +2158,24 @@ async function fbLoad(){
 
     if(persSnap.exists){
       const pd=persSnap.data();
-      personalizados = pd.list || [];
+      if((pd.list||[]).length>0) personalizados=pd.list;
     }
 
     localSave();
     refreshCurrentPage();
     setSyncStatus('cloudsaved');
-    showToast(`🔥 ${loaded} módulo(s) cargados desde Firebase`);
+    showToast(`🔥 ${loaded} módulo(s) sincronizados`);
   } catch(e){
     console.error('fbLoad:', e.message);
     // Fallback a localStorage
-    const ok=localLoad();
-    if(ok){ refreshCurrentPage(); showToast('⚠️ Firebase falló — datos locales restaurados'); }
-    setSyncStatus('error', e.message.includes('permission')?'Verifica reglas Firestore':e.message.slice(0,30));
+    refreshCurrentPage();
+    if(e.message.includes('permission')||e.message.includes('Missing')){
+      setSyncStatus('error','Verifica reglas Firestore');
+      showToast('❌ Error de permisos — revisa las reglas de Firestore');
+    } else {
+      setSyncStatus('error', e.message.slice(0,30));
+      showToast('⚠️ Firebase falló — mostrando datos locales');
+    }
   }
 }
 
