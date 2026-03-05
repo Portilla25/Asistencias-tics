@@ -1987,22 +1987,19 @@ function fbConfigured(){ return !!fbDb; }
 
 function fbInit(cfg){
   try {
-    if(fbApp) { try{ firebase.app(); }catch(e){} }
-    fbApp = firebase.initializeApp(cfg, 'asistencias');
-    fbDb  = firebase.firestore(fbApp);
-    fbDb.settings({ merge: true });
+    // Intentar obtener app existente primero (evita error "duplicate app")
+    try {
+      fbApp = firebase.app('asistencias');
+    } catch(e) {
+      // No existe aún — crearla
+      fbApp = firebase.initializeApp(cfg, 'asistencias');
+    }
+    fbDb = firebase.firestore(fbApp);
     localStorage.setItem('fb_config', JSON.stringify(cfg));
     return true;
   } catch(e) {
-    // Si ya existe la app con mismo nombre, reutilizarla
-    try {
-      fbApp = firebase.app('asistencias');
-      fbDb  = firebase.firestore(fbApp);
-      return true;
-    } catch(e2) {
-      console.error('fbInit error:', e2.message);
-      return false;
-    }
+    console.error('fbInit error:', e.message);
+    return false;
   }
 }
 
@@ -2246,16 +2243,24 @@ function showFirebaseConfig(){
 // ── INIT ──────────────────────────────────────────────────────────
 (function initData(){
   const savedCfg = localStorage.getItem('fb_config');
+  // Siempre cargar local primero para que la UI no quede en blanco
+  const localOk = localLoad();
+  if(localOk) setTimeout(()=>{ refreshCurrentPage(); }, 100);
+
   if(savedCfg){
     try{
-      const cfg=JSON.parse(savedCfg);
-      const ok=fbInit(cfg);
-      if(ok){ fbLoad(); return; }
+      const cfg = JSON.parse(savedCfg);
+      const ok  = fbInit(cfg);
+      if(ok){
+        // Firebase disponible — cargar datos frescos en segundo plano
+        setTimeout(()=>fbLoad(), 200);
+        return;
+      }
     }catch(e){ console.warn('fbInit from storage:', e.message); }
   }
-  // Sin Firebase — cargar local
-  const ok=localLoad();
-  if(ok) setTimeout(()=>{ refreshCurrentPage(); showToast('💾 Datos restaurados'); }, 300);
+  // Sin Firebase configurado
+  if(localOk) showToast('💾 Datos locales restaurados');
+  else showToast('💡 Configura Firebase con el botón 🔥');
   setTimeout(()=>setSyncStatus('unconfigured'), 150);
 })();
 
